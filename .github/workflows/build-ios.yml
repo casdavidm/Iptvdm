@@ -21,7 +21,7 @@ jobs:
         run: |
           rm -rf Frameworks Podfile Podfile.lock Pods Payload *.ipa
 
-      - name: Create Project Definition
+      - name: Create Project Definition with ATS Permissions
         run: |
           cat << 'EOF' > project.yml
           name: StreamOS
@@ -36,11 +36,24 @@ jobs:
               deploymentTarget: "15.0"
               sources:
                 - path: StreamOSNative
+              info:
+                path: StreamOSNative/Info.plist
+                properties:
+                  CFBundleDisplayName: "StreamOS"
+                  CFBundleIdentifier: "com.casdavidm.streamos"
+                  CFBundleShortVersionString: "1.0"
+                  CFBundleVersion: "1"
+                  LSRequiresIPhoneOS: true
+                  UILaunchScreen: {}
+                  UIBackgroundModes:
+                    - audio
+                  NSAppTransportSecurity:
+                    NSAllowsArbitraryLoads: true
+                    NSAllowsArbitraryLoadsInMedia: true
+                    NSAllowsLocalNetworking: true
               settings:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.casdavidm.streamos
-                  INFOPLIST_FILE: StreamOSNative/Info.plist
-                  GENERATE_INFOPLIST_FILE: NO
                   CODE_SIGNING_ALLOWED: NO
                   CODE_SIGNING_REQUIRED: NO
                   CODE_SIGN_IDENTITY: ""
@@ -51,7 +64,7 @@ jobs:
                   ENABLE_BITCODE: NO
           EOF
 
-      - name: Generate Info.plist with Network Permissions
+      - name: Generate Info.plist explicitly
         run: |
           mkdir -p StreamOSNative
           cat << 'EOF' > StreamOSNative/Info.plist
@@ -66,7 +79,7 @@ jobs:
             <key>CFBundleExecutable</key>
             <string>$(EXECUTABLE_NAME)</string>
             <key>CFBundleIdentifier</key>
-            <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+            <string>com.casdavidm.streamos</string>
             <key>CFBundleInfoDictionaryVersion</key>
             <string>6.0</string>
             <key>CFBundleName</key>
@@ -119,11 +132,20 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             COMPILER_INDEX_STORE_ENABLE=NO
 
-      - name: Package StreamOS.ipa
+      - name: Inject ATS directly into built bundle and package IPA
         run: |
-          mkdir -p Payload
           BUILT_APP=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "StreamOS.app" -type d | head -n 1)
           echo "App found at: $BUILT_APP"
+          
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$BUILT_APP/Info.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$BUILT_APP/Info.plist" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$BUILT_APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoadsInMedia bool true" "$BUILT_APP/Info.plist" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInMedia bool true" "$BUILT_APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$BUILT_APP/Info.plist" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$BUILT_APP/Info.plist"
+
+          mkdir -p Payload
           cp -R "$BUILT_APP" Payload/
           zip -qr StreamOS.ipa Payload
 
