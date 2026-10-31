@@ -21,7 +21,7 @@ jobs:
         run: |
           mkdir -p StreamOSNative
 
-      - name: Generate Xcode Project Definition (project.yml)
+      - name: Create Project Definition
         run: |
           cat << 'EOF' > project.yml
           name: StreamOS
@@ -40,20 +40,25 @@ jobs:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.casdavidm.streamos
                   INFOPLIST_FILE: StreamOSNative/Info.plist
-                  IPHONEOS_DEPLOYMENT_TARGET: "15.0"
-                  ENABLE_BITCODE: NO
+                  GENERATE_INFOPLIST_FILE: NO
                   CODE_SIGNING_ALLOWED: NO
                   CODE_SIGNING_REQUIRED: NO
                   CODE_SIGN_IDENTITY: ""
+                  DEVELOPMENT_TEAM: ""
+                  CURRENT_PROJECT_VERSION: 1
+                  MARKETING_VERSION: "1.0"
+                  SWIFT_VERSION: "5.0"
           EOF
 
-      - name: Generate Info.plist for App Transport Security & Audio
+      - name: Generate Info.plist
         run: |
           cat << 'EOF' > StreamOSNative/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
             <key>CFBundleDisplayName</key>
             <string>StreamOS</string>
             <key>CFBundleExecutable</key>
@@ -72,6 +77,8 @@ jobs:
             <string>1</string>
             <key>LSRequiresIPhoneOS</key>
             <true/>
+            <key>UILaunchScreen</key>
+            <dict/>
             <key>UIRequiredDeviceCapabilities</key>
             <array>
               <string>arm64</string>
@@ -93,13 +100,13 @@ jobs:
           </plist>
           EOF
 
-      - name: Generate Xcode Project with XcodeGen
+      - name: Generate Xcode Project
         run: |
           xcodegen generate
 
-      - name: Compile Native Xcode Application
+      - name: Build Application Binary
         run: |
-          xcodebuild clean build \
+          xcodebuild build \
             -project StreamOS.xcodeproj \
             -scheme StreamOS \
             -configuration Release \
@@ -107,17 +114,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO
 
-      - name: Package StreamOS.ipa
+      - name: Create IPA Package
         run: |
           mkdir -p Payload
-          APP_PATH=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "StreamOS.app" -type d | head -n 1)
-          echo "Found app at: $APP_PATH"
-          cp -R "$APP_PATH" Payload/
-          zip -r StreamOS-NativeVLC.ipa Payload
+          BUILT_APP=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "StreamOS.app" -type d | head -n 1)
+          echo "App found at: $BUILT_APP"
+          cp -R "$BUILT_APP" Payload/
+          zip -qr StreamOS-NativeVLC.ipa Payload
 
-      - name: Upload IPA Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: StreamOS-NativeVLC-IPA
