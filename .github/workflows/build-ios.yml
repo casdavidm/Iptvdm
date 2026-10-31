@@ -7,49 +7,62 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Xcode
+      - name: Select Xcode Version
         run: |
-          XCODE_PATH=$(find /Applications -maxdepth 1 -name "Xcode_*.app" | sort -V | tail -n 1)
-          echo "Using $XCODE_PATH"
-          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
 
-      - name: Install Tools & XcodeGen
+      - name: Install XcodeGen
         run: |
           brew install xcodegen
 
-      - name: Generate Xcode Project Definition
+      - name: Ensure Directory Structure
+        run: |
+          mkdir -p StreamOSNative
+
+      - name: Download MobileVLCKit Binary Framework
+        run: |
+          echo "Fetching MobileVLCKit prebuilt xcframework..."
+          curl -L -o MobileVLCKit.tar.xz "https://download.videolan.org/pub/videolan/vlc-iOS/3.3.16.3/MobileVLCKit-3.3.16.3.tar.xz" || true
+          if [ -f MobileVLCKit.tar.xz ]; then
+            tar -xf MobileVLCKit.tar.xz
+            mv MobileVLCKit.xcframework StreamOSNative/ 2>/dev/null || true
+          fi
+
+      - name: Generate Xcode Project Definition (project.yml)
         run: |
           cat << 'EOF' > project.yml
           name: StreamOS
           options:
             bundleIdPrefix: com.casdavidm
             deploymentTarget:
-              iOS: "14.0"
+              iOS: "15.0"
           targets:
             StreamOS:
               type: application
               platform: iOS
-              deploymentTarget: "14.0"
+              deploymentTarget: "15.0"
               sources:
                 - path: StreamOSNative
               settings:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.casdavidm.streamos
                   INFOPLIST_FILE: StreamOSNative/Info.plist
-                  IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+                  IPHONEOS_DEPLOYMENT_TARGET: "15.0"
                   ENABLE_BITCODE: NO
                   CODE_SIGNING_ALLOWED: NO
                   CODE_SIGNING_REQUIRED: NO
                   CODE_SIGN_IDENTITY: ""
+                  OTHER_LDFLAGS: ["-ObjC", "-framework", "AudioToolbox", "-framework", "AVFoundation", "-framework", "CoreMedia", "-framework", "VideoToolbox", "-lstdc++", "-lbz2", "-lz", "-liconv"]
           EOF
 
-      - name: Generate Info.plist for Permissions
+      - name: Generate Info.plist for App Transport Security & Audio
         run: |
           cat << 'EOF' > StreamOSNative/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
@@ -95,15 +108,14 @@ jobs:
           </plist>
           EOF
 
-      - name: Run XcodeGen & CocoaPods
+      - name: Generate Xcode Project with XcodeGen
         run: |
           xcodegen generate
-          pod install --repo-update
 
-      - name: Compile Native Application with VLC
+      - name: Compile Native Xcode Application
         run: |
           xcodebuild clean build \
-            -workspace StreamOS.xcworkspace \
+            -project StreamOS.xcodeproj \
             -scheme StreamOS \
             -configuration Release \
             -sdk iphoneos \
@@ -111,11 +123,11 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-      - name: Package Native IPA
+      - name: Package StreamOS.ipa
         run: |
           mkdir -p Payload
           APP_PATH=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "StreamOS.app" -type d | head -n 1)
-          echo "Found app binary at: $APP_PATH"
+          echo "Found app at: $APP_PATH"
           cp -R "$APP_PATH" Payload/
           zip -r StreamOS-NativeVLC.ipa Payload
 
