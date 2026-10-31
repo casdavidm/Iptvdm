@@ -1,20 +1,17 @@
 {
-  "appId": "com.casdavidm.streamos",
-  "appName": "StreamOS",
-  "webDir": "www",
-  "bundledWebRuntime": false,
-  "server": {
-    "cleartext": true,
-    "allowNavigation": [
-      "veotv.info",
-      "*.veotv.info",
-      "*"
-    ]
+  "name": "streamos-iptv",
+  "version": "1.0.0",
+  "description": "Native IPTV Player for iPhone",
+  "main": "index.js",
+  "scripts": {
+    "build": "echo 'Web assets ready in www/'"
   },
-  "ios": {
-    "scheme": "http",
-    "contentInset": "always",
-    "allowsLinkPreview": false,
-    "scrollEnabled": false
+  "dependencies": {
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "@capacitor-community/http": "^1.4.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0"
   }
 }
