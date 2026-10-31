@@ -1,65 +1,64 @@
-   name: Build Native iOS App (IPA)
+name: Build Native iOS App (IPA)
 
-   on:
-     push:
-       branches: [ main ]
-     workflow_dispatch:
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
-   jobs:
-     build-ios:
-       runs-on: macos-latest
+jobs:
+  build-ios:
+    runs-on: macos-latest
 
-       steps:
-         - name: Checkout code
-           uses: actions/checkout@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-         - name: Set up Node.js
-           uses: actions/setup-node@v4
-           with:
-             node-version: 20
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-         - name: Install Dependencies
-           run: |
-             npm install
+      - name: Install Dependencies
+        run: |
+          npm install
 
-         - name: Prepare Web Directory
-           run: |
-             mkdir -p www
-             cp index.html www/index.html
+      - name: Prepare Web Directory
+        run: |
+          mkdir -p www
+          cp index.html www/index.html
 
-         - name: Initialize Capacitor iOS Project
-           run: |
-             npx cap add ios
-             npx cap sync ios
+      - name: Initialize Capacitor iOS Project
+        run: |
+          npx cap add ios
+          npx cap sync ios
 
-         - name: Configure iOS Permissions (Allow HTTP Streams)
-           run: |
-             PLIST_PATH="ios/App/App/Info.plist"
-             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST_PATH" || true
-             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST_PATH" || true
-             /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST_PATH" || true
-             /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST_PATH" || true
+      - name: Configure iOS Permissions (Allow HTTP Streams)
+        run: |
+          PLIST_PATH="ios/App/App/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST_PATH" || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST_PATH" || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST_PATH" || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST_PATH" || true
 
-         - name: Build Xcode Project (Unsigned IPA)
-           run: |
-             cd ios/App
-             xcodebuild clean build \
-               -workspace App.xcworkspace \
-               -scheme App \
-               -configuration Release \
-               -sdk iphoneos \
-               CODE_SIGNING_ALLOWED=NO \
-               CODE_SIGNING_REQUIRED=NO \
-               CODE_SIGN_IDENTITY=""
+      - name: Build Xcode Project (Unsigned IPA)
+        run: |
+          cd ios/App
+          xcodebuild clean build \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
 
-             mkdir -p build-output/Payload
-             cp -r build/Release-iphoneos/App.app build-output/Payload/
-             cd build-output
-             zip -r ../StreamOS.ipa Payload
+          mkdir -p build-output/Payload
+          cp -r build/Release-iphoneos/App.app build-output/Payload/
+          cd build-output
+          zip -r ../StreamOS.ipa Payload
 
-         - name: Upload IPA Artifact
-           uses: actions/upload-artifact@v4
-           with:
-             name: StreamOS-Native-iOS-IPA
-             path: ios/App/StreamOS.ipa
-   
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StreamOS-Native-iOS-IPA
+          path: ios/App/StreamOS.ipa
