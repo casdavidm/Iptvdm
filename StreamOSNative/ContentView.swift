@@ -1,12 +1,13 @@
 import SwiftUI
+import AVKit
 import Combine
 
-struct XtreamChannel: Identifiable, Codable, Equatable {
+struct XtreamChannel: Identifiable, Equatable {
     let id: String
     let streamId: Int
     let name: String
     let category: String
-    let streamUrl: String
+    let hlsUrl: String
     let tsUrl: String
 }
 
@@ -19,10 +20,10 @@ class IPTVManager: ObservableObject {
     @Published var searchText: String = "" {
         didSet { filterChannels() }
     }
-    @Published var selectedCategory: String = "All" {
+    @Published var selectedCategory: String = "Todas" {
         didSet { filterChannels() }
     }
-    @Published var categories: [String] = ["All"]
+    @Published var categories: [String] = ["Todas"]
 
     @AppStorage("xc_server") var serverUrl: String = "http://veotv.info:8880"
     @AppStorage("xc_user") var username: String = "DavidMunoz1"
@@ -39,13 +40,13 @@ class IPTVManager: ObservableObject {
 
     func fetchChannels() {
         guard !serverUrl.isEmpty, !username.isEmpty, !password.isEmpty else {
-            self.errorMessage = "Ingresa servidor, usuario y contraseña"
+            self.errorMessage = "Configura servidor, usuario y contraseña en Ajustes."
             return
         }
 
         let base = cleanServerUrl(serverUrl)
         guard let endpoint = URL(string: "\(base)/player_api.php?username=\(username)&password=\(password)&action=get_live_streams") else {
-            self.errorMessage = "URL no válida"
+            self.errorMessage = "URL de servidor inválida."
             return
         }
 
@@ -54,20 +55,22 @@ class IPTVManager: ObservableObject {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "GET"
-        request.timeoutInterval = 25.0
+        request.timeoutInterval = 30.0
         request.setValue("IPTVSmartersPro/3.1.5", forHTTPHeaderField: "User-Agent")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
-                self?.isLoading = false
+                guard let self = self else { return }
+                self.isLoading = false
+
                 if let err = error {
-                    self?.errorMessage = "Error de conexión: \(err.localizedDescription)"
+                    self.errorMessage = "Error de red: \(err.localizedDescription)"
                     return
                 }
 
                 guard let rawData = data else {
-                    self?.errorMessage = "Respuesta vacía del servidor"
+                    self.errorMessage = "El servidor no devolvió datos."
                     return
                 }
 
@@ -86,31 +89,31 @@ class IPTVManager: ObservableObject {
                             }
                             catsSet.insert(cat)
 
-                            let hlsUrl = "\(base)/live/\(self?.username ?? "")/\(self?.password ?? "")/\(sId).m3u8"
-                            let tsUrl = "\(base)/\(self?.username ?? "")/\(self?.password ?? "")/\(sId)"
+                            let hls = "\(base)/live/\(self.username)/\(self.password)/\(sId).m3u8"
+                            let ts = "\(base)/\(self.username)/\(self.password)/\(sId)"
 
                             parsed.append(XtreamChannel(
                                 id: "xc-\(sId)",
                                 streamId: sId,
                                 name: sName,
                                 category: cat,
-                                streamUrl: hlsUrl,
-                                tsUrl: tsUrl
+                                hlsUrl: hls,
+                                tsUrl: ts
                             ))
                         }
 
-                        self?.channels = parsed
-                        self?.categories = ["All"] + Array(catsSet).sorted()
-                        self?.filterChannels()
+                        self.channels = parsed
+                        self.categories = ["Todas"] + Array(catsSet).sorted()
+                        self.filterChannels()
 
-                        if let first = self?.filteredChannels.first {
-                            self?.selectedChannel = first
+                        if let first = self.filteredChannels.first {
+                            self.selectedChannel = first
                         }
                     } else {
-                        self?.errorMessage = "Credenciales incorrectas o servidor ocupado"
+                        self.errorMessage = "Credenciales incorrectas o cuenta vencida."
                     }
                 } catch {
-                    self?.errorMessage = "Error al procesar: \(error.localizedDescription)"
+                    self.errorMessage = "Error al procesar canales: \(error.localizedDescription)"
                 }
             }
         }.resume()
@@ -118,7 +121,7 @@ class IPTVManager: ObservableObject {
 
     func filterChannels() {
         var result = channels
-        if selectedCategory != "All" {
+        if selectedCategory != "Todas" {
             result = result.filter { $0.category == selectedCategory }
         }
         if !searchText.isEmpty {
@@ -128,88 +131,69 @@ class IPTVManager: ObservableObject {
     }
 }
 
-#if canImport(MobileVLCKit)
-import MobileVLCKit
+struct NativePlayerView: UIViewControllerRepresentable {
+    let streamUrl: String
 
-struct VLCPlayerView: UIViewRepresentable {
-    let url: String
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.showsPlaybackControls = true
+        controller.videoGravity = .resizeAspect
+        controller.allowsPictureInPicturePlayback = true
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .black
-        context.coordinator.mediaPlayer.drawable = view
-        playStream(context: context)
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        if context.coordinator.currentUrl != url {
-            playStream(context: context)
+        if let url = URL(string: streamUrl) {
+            let player = AVPlayer(url: url)
+            controller.player = player
+            player.play()
         }
+        return controller
     }
 
-    private func playStream(context: Context) {
-        guard let streamUrl = URL(string: url) else { return }
-        context.coordinator.currentUrl = url
-        let media = VLCMedia(url: streamUrl)
-        media.addOptions([
-            "network-caching": 1500,
-            ":network-caching=1500",
-            ":clock-jitter=0",
-            ":clock-synchro=0"
-        ])
-        context.coordinator.mediaPlayer.media = media
-        context.coordinator.mediaPlayer.play()
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    class Coordinator: NSObject {
-        var mediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
-        var currentUrl: String = ""
-        deinit { mediaPlayer.stop() }
-    }
-}
-#else
-struct VLCPlayerView: View {
-    let url: String
-    var body: some View {
-        ZStack {
-            Color.black
-            VStack {
-                Image(systemName: "tv")
-                    .font(.largeTitle)
-                    .foregroundColor(.red)
-                Text("VLC Player Engine")
-                    .foregroundColor(.gray)
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        guard let currentUrl = (uiViewController.player?.currentItem?.asset as? AVURLAsset)?.url.absoluteString else {
+            if let url = URL(string: streamUrl) {
+                let player = AVPlayer(url: url)
+                uiViewController.player = player
+                player.play()
             }
+            return
+        }
+
+        if currentUrl != streamUrl, let newUrl = URL(string: streamUrl) {
+            let player = AVPlayer(url: newUrl)
+            uiViewController.player = player
+            player.play()
         }
     }
 }
-#endif
 
 struct ContentView: View {
     @StateObject private var iptv = IPTVManager()
     @State private var showSettings = false
+    @State private var useTsFormat = false
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 ZStack {
                     if let selected = iptv.selectedChannel {
-                        VLCPlayerView(url: selected.tsUrl)
+                        NativePlayerView(streamUrl: useTsFormat ? selected.tsUrl : selected.hlsUrl)
                             .aspectRatio(16/9, contentMode: .fit)
                             .background(Color.black)
                     } else {
                         Rectangle()
                             .fill(Color.black)
                             .aspectRatio(16/9, contentMode: .fit)
-                            .overlay(Text("Selecciona un canal").foregroundColor(.gray))
+                            .overlay(
+                                Text(iptv.isLoading ? "Cargando lista..." : "Selecciona un canal")
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                            )
                     }
 
                     if iptv.isLoading {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.3)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -218,15 +202,24 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(iptv.selectedChannel?.name ?? "StreamOS")
                             .font(.headline)
-                            .foregroundColor(.white)
                             .lineLimit(1)
-                        Text(iptv.selectedChannel?.category ?? "VLC Engine")
+                        Text(iptv.selectedChannel?.category ?? "En vivo")
                             .font(.caption2)
                             .foregroundColor(.gray)
                     }
                     Spacer()
+                    Button(action: { useTsFormat.toggle() }) {
+                        Text(useTsFormat ? "TS" : "HLS")
+                            .font(.caption.bold())
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.red.opacity(0.2))
+                            .foregroundColor(.red)
+                            .cornerRadius(8)
+                    }
                     Button(action: { iptv.fetchChannels() }) {
                         Image(systemName: "arrow.clockwise")
+                            .font(.subheadline)
                             .padding(8)
                             .background(Color(.secondarySystemBackground))
                             .clipShape(Circle())
@@ -255,11 +248,14 @@ struct ContentView: View {
                 }
 
                 HStack {
-                    Image(systemName: "magnifyingglass").foregroundColor(.gray)
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
                     TextField("Buscar canal...", text: $iptv.searchText)
+                        .font(.subheadline)
                     if !iptv.searchText.isEmpty {
                         Button(action: { iptv.searchText = "" }) {
-                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
                         }
                     }
                 }
@@ -270,12 +266,20 @@ struct ContentView: View {
                 .padding(.vertical, 4)
 
                 if let err = iptv.errorMessage {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundColor(.yellow)
+                            .font(.largeTitle)
                         Text(err)
-                            .font(.caption)
+                            .font(.subheadline)
+                            .multilineTextAlignment(.center)
                             .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                        Button("Abrir Ajustes") {
+                            showSettings = true
+                        }
+                        .font(.caption.bold())
+                        .foregroundColor(.red)
                     }
                     .frame(maxHeight: .infinity)
                 } else {
@@ -293,6 +297,7 @@ struct ContentView: View {
                             Spacer()
                             if iptv.selectedChannel?.id == channel.id {
                                 Image(systemName: "speaker.wave.2.fill")
+                                    .font(.caption)
                                     .foregroundColor(.red)
                             }
                         }
@@ -333,6 +338,7 @@ struct SettingsView: View {
                         .disableAutocorrection(true)
                     TextField("Usuario", text: $iptv.username)
                         .autocapitalization(.none)
+                        .disableAutocorrection(true)
                     SecureField("Contraseña", text: $iptv.password)
                 }
 
@@ -343,7 +349,7 @@ struct SettingsView: View {
                     }) {
                         HStack {
                             Spacer()
-                            Text("Conectar y Sincronizar")
+                            Text("Guardar y Sincronizar")
                                 .bold()
                                 .foregroundColor(.red)
                             Spacer()
