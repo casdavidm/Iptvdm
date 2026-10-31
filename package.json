@@ -1,0 +1,17 @@
+   {
+     "name": "streamos-iptv",
+     "version": "1.0.0",
+     "description": "Native IPTV Player for iPhone",
+     "main": "index.js",
+     "scripts": {
+       "build": "echo 'Web assets ready in www/'"
+     },
+     "dependencies": {
+       "@capacitor/core": "^6.0.0",
+       "@capacitor/ios": "^6.0.0"
+     },
+     "devDependencies": {
+       "@capacitor/cli": "^6.0.0"
+     }
+   }
+   
