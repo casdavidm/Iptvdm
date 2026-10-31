@@ -21,7 +21,7 @@ jobs:
         run: |
           rm -rf Frameworks Podfile Podfile.lock Pods Payload *.ipa build
 
-      - name: Create Info.plist with App Transport Security
+      - name: Create Info.plist with Domain Specific ATS
         run: |
           mkdir -p StreamOSNative
           cat << 'EOF' > StreamOSNative/Info.plist
@@ -65,10 +65,24 @@ jobs:
               <true/>
               <key>NSAllowsArbitraryLoadsInMedia</key>
               <true/>
-              <key>NSAllowsArbitraryLoadsForMedia</key>
-              <true/>
               <key>NSAllowsLocalNetworking</key>
               <true/>
+              <key>NSExceptionDomains</key>
+              <dict>
+                <key>veotv.info</key>
+                <dict>
+                  <key>NSIncludesSubdomains</key>
+                  <true/>
+                  <key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+                  <true/>
+                  <key>NSTemporaryExceptionMinimumTLSVersion</key>
+                  <string>TLSv1.0</string>
+                  <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                  <true/>
+                  <key>NSExceptionRequiresForwardSecrecy</key>
+                  <false/>
+                </dict>
+              </dict>
             </dict>
           </dict>
           </plist>
@@ -127,17 +141,13 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/StreamOS.xcarchive/Products/Applications/StreamOS.app Payload/
-          
           cp StreamOSNative/Info.plist Payload/StreamOS.app/Info.plist
           plutil -convert binary1 Payload/StreamOS.app/Info.plist
-          
-          plutil -p Payload/StreamOS.app/Info.plist | grep -A 5 NSAppTransportSecurity || true
-
           zip -qr StreamOS.ipa Payload
-          ls -lh StreamOS.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: StreamOS-IPA
           path: StreamOS.ipa
+          
