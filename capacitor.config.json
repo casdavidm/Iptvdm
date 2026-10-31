@@ -1,20 +1,20 @@
-   {
-     "appId": "com.casdavidm.streamos",
-     "appName": "StreamOS",
-     "webDir": "www",
-     "bundledWebRuntime": false,
-     "server": {
-       "cleartext": true,
-       "allowNavigation": [
-         "veotv.info",
-         "*.veotv.info",
-         "*"
-       ]
-     },
-     "ios": {
-       "contentInset": "always",
-       "allowsLinkPreview": false,
-       "scrollEnabled": false
-     }
-   }
-   
+{
+  "appId": "com.casdavidm.streamos",
+  "appName": "StreamOS",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": {
+    "cleartext": true,
+    "allowNavigation": [
+      "veotv.info",
+      "*.veotv.info",
+      "*"
+    ]
+  },
+  "ios": {
+    "scheme": "http",
+    "contentInset": "always",
+    "allowsLinkPreview": false,
+    "scrollEnabled": false
+  }
+}
