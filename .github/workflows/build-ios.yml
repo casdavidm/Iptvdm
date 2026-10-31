@@ -37,15 +37,17 @@ jobs:
           cd ios/App
           pod install
 
-      - name: Configure iOS Network Permissions (Allow HTTP Streams)
+      - name: Configure iOS Network Permissions (Allow HTTP Streams & Media)
         run: |
           PLIST_PATH="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST_PATH" || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST_PATH" || true
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST_PATH"
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoadsInMedia bool true" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInMedia bool true" "$PLIST_PATH"
+          /usr/libexec/PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$PLIST_PATH"
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST_PATH" || true
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST_PATH" || true
 
-      - name: Build Xcode Project
+      - name: Build Xcode Project (Unsigned)
         run: |
           cd ios/App
           xcodebuild clean build \
@@ -53,15 +55,16 @@ jobs:
             -scheme App \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath outputBuild \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-      - name: Package Unsigned IPA
+      - name: Package IPA
         run: |
           mkdir -p Payload
-          cp -R ios/App/outputBuild/Build/Products/Release-iphoneos/App.app Payload/
+          APP_PATH=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "App.app" -type d | head -n 1)
+          echo "Found compiled app at: $APP_PATH"
+          cp -R "$APP_PATH" Payload/
           zip -r StreamOS.ipa Payload
 
       - name: Upload IPA Artifact
