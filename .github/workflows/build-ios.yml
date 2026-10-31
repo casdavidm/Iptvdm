@@ -29,7 +29,8 @@ jobs:
 
       - name: Initialize Capacitor iOS Platform
         run: |
-          npx cap add ios || true
+          npx cap init StreamOS com.casdavidm.streamos --web-dir www
+          npx cap add ios
           npx cap sync ios
 
       - name: Install CocoaPods
