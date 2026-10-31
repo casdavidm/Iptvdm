@@ -62,7 +62,20 @@ jobs:
                   MARKETING_VERSION: "1.0"
                   SWIFT_VERSION: "5.0"
                   ENABLE_BITCODE: NO
-                  FRAMEWORK_SEARCH_PATHS: ["$(inherited)", "$(PROJECT_DIR)/Frameworks"]
+                  DEFINES_MODULE: YES
+                  ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: YES
+                  FRAMEWORK_SEARCH_PATHS:
+                    - "$(inherited)"
+                    - "$(PROJECT_DIR)/Frameworks"
+                    - "$(PROJECT_DIR)/Frameworks/MobileVLCKit.xcframework/ios-arm64"
+                  OTHER_LDFLAGS:
+                    - "$(inherited)"
+                    - "-framework"
+                    - "MobileVLCKit"
+                    - "-lc++"
+                    - "-lbz2"
+                    - "-lz"
+                    - "-liconv"
           EOF
 
       - name: Generate Info.plist
