@@ -16,9 +16,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Install Dependencies
+      - name: Install Project Dependencies
         run: |
           npm install
 
@@ -27,12 +27,17 @@ jobs:
           mkdir -p www
           cp index.html www/index.html
 
-      - name: Initialize Capacitor iOS Project
+      - name: Initialize Capacitor iOS Platform
         run: |
-          npx cap add ios
+          npx cap add ios || true
           npx cap sync ios
 
-      - name: Configure iOS Permissions (Allow HTTP Streams)
+      - name: Install CocoaPods
+        run: |
+          cd ios/App
+          pod install
+
+      - name: Configure iOS Network Permissions (Allow HTTP Streams)
         run: |
           PLIST_PATH="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST_PATH" || true
@@ -40,7 +45,7 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST_PATH" || true
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST_PATH" || true
 
-      - name: Build Xcode Project (Unsigned IPA)
+      - name: Build Xcode Project
         run: |
           cd ios/App
           xcodebuild clean build \
@@ -48,17 +53,19 @@ jobs:
             -scheme App \
             -configuration Release \
             -sdk iphoneos \
+            -derivedDataPath outputBuild \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-          mkdir -p build-output/Payload
-          cp -r build/Release-iphoneos/App.app build-output/Payload/
-          cd build-output
-          zip -r ../StreamOS.ipa Payload
+      - name: Package Unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R ios/App/outputBuild/Build/Products/Release-iphoneos/App.app Payload/
+          zip -r StreamOS.ipa Payload
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: StreamOS-Native-iOS-IPA
-          path: ios/App/StreamOS.ipa
+          path: StreamOS.ipa
