@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>StreamOS - IPTV Player</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- HLS.js for universal stream playback -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <!-- Phosphor Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <!-- Google Font: Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+    }
+    html, body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      height: 100dvh;
+      width: 100vw;
+      overflow: hidden;
+      background-color: #020617;
+      margin: 0;
+      padding: 0;
+    }
+    .ios-header-safe {
+      padding-top: max(calc(env(safe-area-inset-top, 0px) + 10px), 44px);
+    }
+    .ios-bottom-safe {
+      padding-bottom: max(calc(env(safe-area-inset-bottom, 0px) + 8px), 14px);
+    }
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    @keyframes pulse-live {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.92); }
+    }
+    .live-dot {
+      animation: pulse-live 2s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 overflow-hidden flex flex-col justify-between select-none">
+
+  <!-- Main Container -->
+  <div class="relative w-full h-full max-w-md mx-auto bg-slate-900 flex flex-col shadow-2xl border-x border-slate-800/80 overflow-hidden">
+
+    <!-- Top Navigation Header -->
+    <header class="px-4 ios-header-safe pb-2.5 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 flex items-center justify-between z-20 flex-shrink-0">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-rose-600 to-orange-500 flex items-center justify-center shadow-lg shadow-rose-600/25">
+          <i class="ph-fill ph-television text-base text-white"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-1.5">
+            <h1 class="font-bold text-sm tracking-tight text-white leading-none">StreamOS</h1>
+            <span class="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">ONLINE</span>
+          </div>
+          <p id="playlist-stats" class="text-[10px] text-slate-400 mt-0.5">Cargando...</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-1.5">
+        <button type="button" onclick="refreshAutoChannels()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition active:scale-95" title="Recargar Lista">
+          <i class="ph ph-arrows-clockwise text-base pointer-events-none"></i>
+        </button>
+        <button type="button" onclick="togglePiP()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition active:scale-95" title="Picture in Picture">
+          <i class="ph ph-picture-in-picture text-base pointer-events-none"></i>
+        </button>
+        <button type="button" onclick="openPlaylistModal()" class="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-md shadow-rose-600/25 transition active:scale-95">
+          <i class="ph-bold ph-gear text-xs pointer-events-none"></i>
+          <span>Ajustes</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Player Video Box -->
+    <div class="relative w-full aspect-video bg-black flex-shrink-0 overflow-hidden border-b border-slate-800">
+      <video id="video-player" class="w-full h-full object-contain bg-black" playsinline webkit-playsinline x5-playsinline controls preload="auto"></video>
+
+      <!-- Loading Overlay -->
+      <div id="player-loader" class="hidden absolute inset-0 bg-black/80 backdrop-blur-xs flex flex-col items-center justify-center z-10 pointer-events-none">
+        <div class="w-8 h-8 border-3 border-rose-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+        <span id="player-loader-text" class="text-[11px] font-medium text-slate-200">Abriendo stream...</span>
+      </div>
+
+      <!-- Playback Error / Action Overlay -->
+      <div id="player-error" class="hidden absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-4 text-center z-10 space-y-3">
+        <div class="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+          <i class="ph-fill ph-play-circle text-2xl pointer-events-none"></i>
+        </div>
+        <div>
+          <h3 class="text-xs font-bold text-white">Iniciar Reproducción</h3>
+          <p class="text-[10px] text-slate-400 max-w-[280px] mt-1 leading-snug">
+            GitHub Pages bloquea streams HTTP dentro de su web. Toca el botón verde para reproducir directo en el reproductor de tu iPhone:
+          </p>
+        </div>
+
+        <div class="flex flex-col gap-2 w-full max-w-[290px]">
+          <!-- Botón primario: abre el stream directo en QuickTime / AVPlayer de Apple -->
+          <button type="button" onclick="openDirectNativeStream()" class="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 active:scale-95">
+            <i class="ph-fill ph-play text-sm pointer-events-none"></i>
+            <span>Reproducir Canal en Pantalla Completa</span>
+          </button>
+          
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" onclick="retryDirectHls()" class="py-2 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] font-semibold text-slate-300 transition flex items-center justify-center gap-1 active:scale-95">
+              <i class="ph-bold ph-arrow-clockwise pointer-events-none"></i>
+              <span>Reintentar Web</span>
+            </button>
+            <button type="button" onclick="openInVlcApp()" class="py-2 px-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-[10px] font-semibold text-white transition flex items-center justify-center gap-1 active:scale-95">
+              <i class="ph-bold ph-broadcast pointer-events-none"></i>
+              <span>Abrir en VLC</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Badge on Top of Video -->
+      <div class="absolute top-0 inset-x-0 p-2.5 bg-gradient-to-b from-black/80 via-black/30 to-transparent flex items-center justify-between pointer-events-none">
+        <div class="flex items-center gap-1.5">
+          <span class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600/90 text-white font-bold text-[9px] tracking-wider uppercase shadow">
+            <span class="w-1.5 h-1.5 rounded-full bg-white live-dot"></span>
+            LIVE
+          </span>
+          <span id="now-playing-title" class="text-xs font-semibold text-white truncate max-w-[190px]">Selecciona un canal</span>
+        </div>
+        <span id="now-playing-cat" class="text-[10px] font-medium px-2 py-0.5 rounded bg-white/15 text-slate-200 backdrop-blur-md">VEO TV</span>
+      </div>
+    </div>
+
+    <!-- Mini Control Bar -->
+    <div class="px-3 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs flex-shrink-0">
+      <div class="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
+        <div class="w-8 h-8 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-[11px] text-rose-400 shrink-0" id="current-logo-ph">
+          TV
+        </div>
+        <div class="truncate">
+          <div id="bar-channel-name" class="font-bold text-white text-xs truncate">Listo</div>
+          <div id="bar-channel-epg" class="text-[10px] text-slate-400 truncate">Toca cualquier canal de la lista</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-1 shrink-0">
+        <button type="button" onclick="playPrevChannel()" class="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 active:scale-95 transition">
+          <i class="ph-bold ph-caret-left text-sm pointer-events-none"></i>
+        </button>
+        <button type="button" onclick="toggleCurrentFavorite()" id="bar-fav-btn" class="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 active:scale-95 transition">
+          <i class="ph-fill ph-heart text-sm pointer-events-none"></i>
+        </button>
+        <button type="button" onclick="playNextChannel()" class="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 active:scale-95 transition">
+          <i class="ph-bold ph-caret-right text-sm pointer-events-none"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Search & Filters -->
+    <div id="filter-container" class="p-2.5 bg-slate-900/60 border-b border-slate-800 space-y-2 flex-shrink-0">
+      <div class="relative flex items-center">
+        <i class="ph ph-magnifying-glass absolute left-3 text-slate-400 text-sm pointer-events-none"></i>
+        <input 
+          type="text" 
+          id="search-input" 
+          placeholder="Buscar canal o categoría..." 
+          oninput="handleSearch()"
+          class="w-full pl-8 pr-7 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-400 focus:outline-none focus:border-rose-500"
+        />
+        <button type="button" id="clear-search-btn" onclick="clearSearch()" class="hidden absolute right-2.5 text-slate-400 hover:text-white">
+          <i class="ph-fill ph-x-circle text-sm pointer-events-none"></i>
+        </button>
+      </div>
+      <div id="category-pills" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5"></div>
+    </div>
+
+    <!-- Channel List Container -->
+    <div id="channels-wrapper" class="flex-1 overflow-y-auto px-3 py-2 space-y-1.5"></div>
+
+    <!-- Fixed Bottom Tab Bar -->
+    <nav class="bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-4 pt-2.5 ios-bottom-safe flex items-center justify-around w-full z-30 flex-shrink-0">
+      <button type="button" onclick="switchTab('all')" id="tab-all" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-rose-500 active:scale-95 transition cursor-pointer">
+        <i class="ph-fill ph-television-simple text-xl pointer-events-none"></i>
+        <span class="text-[10px] font-medium pointer-events-none">Live TV</span>
+      </button>
+
+      <button type="button" onclick="switchTab('favorites')" id="tab-favorites" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition relative cursor-pointer">
+        <div class="relative pointer-events-none">
+          <i class="ph ph-heart text-xl pointer-events-none"></i>
+          <span id="fav-count-badge" class="hidden absolute -top-1 -right-2 bg-rose-600 text-white text-[8px] font-bold px-1 rounded-full">0</span>
+        </div>
+        <span class="text-[10px] font-medium pointer-events-none">Favoritos</span>
+      </button>
+
+      <button type="button" onclick="switchTab('recent')" id="tab-recent" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer">
+        <i class="ph ph-clock-counter-clockwise text-xl pointer-events-none"></i>
+        <span class="text-[10px] font-medium pointer-events-none">Recientes</span>
+      </button>
+
+      <button type="button" onclick="openPlaylistModal()" id="tab-playlists" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer">
+        <i class="ph ph-gear text-xl pointer-events-none"></i>
+        <span class="text-[10px] font-medium pointer-events-none">Ajustes</span>
+      </button>
+    </nav>
+
+    <!-- Toast -->
+    <div id="toast" class="pointer-events-none fixed top-16 left-1/2 -translate-x-1/2 z-50 opacity-0 transition-all duration-300 transform -translate-y-2">
+      <div class="bg-slate-800/95 border border-slate-700 text-white px-3.5 py-1.5 rounded-full shadow-xl flex items-center gap-2 text-xs font-medium backdrop-blur-md">
+        <i id="toast-icon" class="ph-fill ph-check-circle text-emerald-400 text-sm"></i>
+        <span id="toast-msg">Notificación</span>
+      </div>
+    </div>
+
+    <!-- Settings / Server Config Modal -->
+    <div id="playlist-modal" class="hidden fixed inset-0 z-40 bg-black/75 backdrop-blur-xs flex items-end justify-center p-0">
+      <div class="bg-slate-900 border border-slate-800 w-full max-w-md rounded-t-3xl p-4 pb-8 shadow-2xl space-y-3.5 max-h-[85dvh] overflow-y-auto">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
+          <div class="flex items-center gap-2">
+            <i class="ph-fill ph-gear text-rose-500 text-lg"></i>
+            <h2 class="text-sm font-bold text-white">Configurar Servidor Xtream</h2>
+          </div>
+          <button type="button" onclick="closePlaylistModal()" class="p-1 rounded-full bg-slate-800 text-slate-400 hover:text-white">
+            <i class="ph ph-x text-sm"></i>
+          </button>
+        </div>
+
+        <div class="space-y-2.5">
+          <div>
+            <label class="text-[10px] font-semibold text-slate-400 block mb-0.5">Servidor URL</label>
+            <input type="url" id="xc-url-input" placeholder="http://veotv.info:8080" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-rose-500" />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="text-[10px] font-semibold text-slate-400 block mb-0.5">Usuario</label>
+              <input type="text" id="xc-user-input" placeholder="usuario" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-rose-500" />
+            </div>
+            <div>
+              <label class="text-[10px] font-semibold text-slate-400 block mb-0.5">Contraseña</label>
+              <input type="password" id="xc-pass-input" placeholder="••••••••" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-rose-500" />
+            </div>
+          </div>
+
+          <div class="pt-2">
+            <button type="button" onclick="saveAndConnectXtream()" id="xc-login-btn" class="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-md shadow-rose-600/25 transition flex items-center justify-center gap-1.5">
+              <i class="ph-bold ph-floppy-disk text-xs"></i>
+              <span>Guardar y Sincronizar Canales</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let allChannels = [];
+    let filteredChannels = [];
+    let currentChannelIndex = -1;
+    let activeCategory = 'All';
+    let activeTab = 'all';
+    let favorites = JSON.parse(localStorage.getItem('streamos_favs') || '[]');
+    let recentIds = JSON.parse(localStorage.getItem('streamos_recent') || '[]');
+    let hlsInstance = null;
+    let connectionTimeout = null;
+
+    const videoEl = document.getElementById('video-player');
+    const loaderEl = document.getElementById('player-loader');
+    const loaderTextEl = document.getElementById('player-loader-text');
+    const errorEl = document.getElementById('player-error');
+
+    window.onload = function() {
+      updateFavBadge();
+
+      // Cargar credenciales guardadas
+      const savedXc = JSON.parse(localStorage.getItem('streamos_xc_creds') || 'null');
+      if (savedXc) {
+        document.getElementById('xc-url-input').value = savedXc.serverUrl || '';
+        document.getElementById('xc-user-input').value = savedXc.username || '';
+        document.getElementById('xc-pass-input').value = savedXc.password || '';
+      }
+
+      // Cargar canales cacheados
+      const savedStreams = JSON.parse(localStorage.getItem('streamos_saved_channels') || 'null');
+      if (Array.isArray(savedStreams) && savedStreams.length > 0) {
+        allChannels = savedStreams;
+        renderCategories();
+        applyFilters();
+        if (allChannels.length > 0) {
+          selectChannel(allChannels[0].id, false);
+        }
+      } else if (savedXc && savedXc.serverUrl && savedXc.username && savedXc.password) {
+        autoSyncXtream(savedXc);
+      }
+    };
+
+    function refreshAutoChannels() {
+      const savedXc = JSON.parse(localStorage.getItem('streamos_xc_creds') || 'null');
+      if (savedXc && savedXc.serverUrl && savedXc.username && savedXc.password) {
+        showToast('Actualizando canales...', 'ph-arrows-clockwise');
+        autoSyncXtream(savedXc);
+      } else {
+        openPlaylistModal();
+      }
+    }
+
+    async function autoSyncXtream(creds) {
+      let baseUrl = creds.serverUrl.trim().replace(/\/+$/, '');
+      if (!/^https?:\/\//i.test(baseUrl)) baseUrl = 'http://' + baseUrl;
+
+      try {
+        const apiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(creds.username)}&password=${encodeURIComponent(creds.password)}&action=get_live_streams`;
+        const streams = await fetchWithCorsFallback(apiUrl, 15000);
+
+        if (Array.isArray(streams) && streams.length > 0) {
+          allChannels = streams.map((st, idx) => {
+            const rawName = st.name || `Canal ${idx + 1}`;
+            let cat = 'Live TV';
+            const match = rawName.match(/^([A-Za-z0-9\s★\-]{2,14})[|:\-]/);
+            if (match) cat = match[1].trim();
+
+            const hlsUrl = `${baseUrl}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${st.stream_id}.m3u8`;
+            const tsUrl = `${baseUrl}/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${st.stream_id}`;
+
+            return {
+              id: `xc-${st.stream_id || idx}`,
+              name: rawName,
+              category: cat,
+              epg: `#${st.num || idx + 1} • En Vivo`,
+              url: hlsUrl,
+              directUrl: tsUrl
+            };
+          });
+
+          localStorage.setItem('streamos_saved_channels', JSON.stringify(allChannels.slice(0, 2000)));
+          renderCategories();
+          applyFilters();
+          showToast(`${allChannels.length} canales listos`, 'ph-check-circle');
+
+          if (currentChannelIndex === -1 && allChannels.length > 0) {
+            selectChannel(allChannels[0].id, false);
+          }
+        }
+      } catch (err) {
+        showToast('Error conectando al servidor', 'ph-warning');
+      }
+    }
+
+    async function fetchWithCorsFallback(targetUrl, timeoutMs = 15000) {
+      const proxies = [
+        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+      ];
+
+      for (const buildUrl of proxies) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const reqUrl = buildUrl(targetUrl);
+          const res = await fetch(reqUrl, { signal: controller.signal, referrerPolicy: 'no-referrer' });
+          clearTimeout(timer);
+          if (res.ok) {
+            const data = await res.json();
+            if (data) return data;
+          }
+        } catch (e) {
+          clearTimeout(timer);
+        }
+      }
+      throw new Error('No se pudo descargar la lista de canales');
+    }
+
+    async function saveAndConnectXtream() {
+      let baseUrl = document.getElementById('xc-url-input').value.trim();
+      const username = document.getElementById('xc-user-input').value.trim();
+      const password = document.getElementById('xc-pass-input').value.trim();
+
+      if (!baseUrl || !username || !password) {
+        showToast('Completa todos los campos', 'ph-warning');
+        return;
+      }
+      if (!/^https?:\/\//i.test(baseUrl)) baseUrl = 'http://' + baseUrl;
+
+      const creds = { serverUrl: baseUrl, username, password };
+      localStorage.setItem('streamos_xc_creds', JSON.stringify(creds));
+
+      const btn = document.getElementById('xc-login-btn');
+      const orig = btn.innerHTML;
+      btn.innerHTML = `<i class="ph ph-spinner animate-spin text-xs"></i><span>Conectando...</span>`;
+
+      try {
+        await autoSyncXtream(creds);
+        closePlaylistModal();
+      } finally {
+        btn.innerHTML = orig;
+      }
+    }
+
+    function selectCategory(catName) {
+      activeCategory = catName;
+      renderCategories();
+      applyFilters();
+    }
+
+    function renderCategories() {
+      const container = document.getElementById('category-pills');
+      container.innerHTML = '';
+      const unique = ['All', ...new Set(allChannels.map(c => c.category || 'Live TV'))].slice(0, 35);
+
+      unique.forEach(cat => {
+        const btn = document.createElement('button');
+        const active = cat === activeCategory;
+        btn.className = `px-3 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition cursor-pointer ${
+          active ? 'bg-rose-600 text-white shadow' : 'bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700/60'
+        }`;
+        btn.textContent = cat;
+        btn.onclick = () => selectCategory(cat);
+        container.appendChild(btn);
+      });
+    }
+
+    function applyFilters() {
+      const query = document.getElementById('search-input').value.toLowerCase().trim();
+      const clearBtn = document.getElementById('clear-search-btn');
+      if (query) clearBtn.classList.remove('hidden');
+      else clearBtn.classList.add('hidden');
+
+      let base = [...allChannels];
+      if (activeTab === 'favorites') {
+        base = base.filter(c => favorites.includes(c.id));
+      } else if (activeTab === 'recent') {
+        base = recentIds.map(id => allChannels.find(c => c.id === id)).filter(Boolean);
+      }
+
+      if (activeCategory !== 'All') {
+        base = base.filter(c => c.category === activeCategory);
+      }
+
+      if (query) {
+        base = base.filter(c => c.name.toLowerCase().includes(query));
+      }
+
+      filteredChannels = base;
+      const statsPrefix = activeTab === 'favorites' ? 'Favoritos' : activeTab === 'recent' ? 'Recientes' : 'VEO TV';
+      document.getElementById('playlist-stats').textContent = `${statsPrefix} • ${filteredChannels.length} Canales`;
+      renderChannelList();
+    }
+
+    function selectChannel(channelId, autoPlay = true) {
+      const idx = allChannels.findIndex(c => c.id === channelId);
+      if (idx === -1) return;
+      currentChannelIndex = idx;
+      const ch = allChannels[idx];
+
+      document.getElementById('now-playing-title').textContent = ch.name;
+      document.getElementById('now-playing-cat').textContent = ch.category || 'En Vivo';
+      document.getElementById('bar-channel-name').textContent = ch.name;
+      document.getElementById('bar-channel-epg').textContent = ch.epg;
+
+      updateCurrentFavButton(ch.id);
+      addToRecent(ch.id);
+      renderChannelList();
+
+      loadVideoStream(ch.url, autoPlay);
+    }
+
+    function destroyActivePlayer() {
+      if (connectionTimeout) {
+        clearTimeout(connectionTimeout);
+        connectionTimeout = null;
+      }
+      if (hlsInstance) {
+        try { hlsInstance.destroy(); } catch (e) {}
+        hlsInstance = null;
+      }
+      videoEl.pause();
+      videoEl.removeAttribute('src');
+      videoEl.load();
+    }
+
+    function loadVideoStream(streamUrl, autoPlay = true) {
+      errorEl.classList.add('hidden');
+      loaderEl.classList.remove('hidden');
+      loaderTextEl.textContent = 'Conectando canal...';
+      destroyActivePlayer();
+
+      // Temporizador: Si en 4.5 segundos el navegador no arranca por bloqueo de seguridad HTTPS,
+      // mostramos la acción limpia para abrir con 1 toque en el reproductor nativo del iPhone
+      connectionTimeout = setTimeout(() => {
+        loaderEl.classList.add('hidden');
+        errorEl.classList.remove('hidden');
+      }, 4500);
+
+      // Reproducción nativa HLS de Apple en Safari (iOS / iPadOS)
+      if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+        videoEl.src = streamUrl;
+
+        const onPlaying = () => {
+          if (connectionTimeout) clearTimeout(connectionTimeout);
+          loaderEl.classList.add('hidden');
+          errorEl.classList.add('hidden');
+          cleanup();
+        };
+
+        const onError = () => {
+          if (connectionTimeout) clearTimeout(connectionTimeout);
+          loaderEl.classList.add('hidden');
+          errorEl.classList.remove('hidden');
+          cleanup();
+        };
+
+        const cleanup = () => {
+          videoEl.removeEventListener('playing', onPlaying);
+          videoEl.removeEventListener('loadedmetadata', onPlaying);
+          videoEl.removeEventListener('error', onError);
+        };
+
+        videoEl.addEventListener('playing', onPlaying);
+        videoEl.addEventListener('loadedmetadata', onPlaying);
+        videoEl.addEventListener('error', onError);
+
+        if (autoPlay) {
+          videoEl.play().catch(() => {});
+        }
+        return;
+      }
+
+      // Reproducción mediante HLS.js si es Chrome o Firefox
+      if (Hls.isSupported()) {
+        hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hlsInstance.loadSource(streamUrl);
+        hlsInstance.attachMedia(videoEl);
+
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (connectionTimeout) clearTimeout(connectionTimeout);
+          loaderEl.classList.add('hidden');
+          if (autoPlay) videoEl.play().catch(() => {});
+        });
+
+        hlsInstance.on(Hls.Events.ERROR, (e, data) => {
+          if (data.fatal) {
+            if (connectionTimeout) clearTimeout(connectionTimeout);
+            loaderEl.classList.add('hidden');
+            errorEl.classList.remove('hidden');
+          }
+        });
+      }
+    }
+
+    function retryDirectHls() {
+      const ch = allChannels[currentChannelIndex];
+      if (!ch) return;
+      loadVideoStream(ch.url, true);
+    }
+
+    function openDirectNativeStream() {
+      const ch = allChannels[currentChannelIndex];
+      if (!ch) return;
+      // Navegación directa: En iOS, Safari lanza el reproductor AVPlayer del sistema
+      // saltándose todas las restricciones de Mixed Content de la página web
+      window.location.href = ch.url;
+    }
+
+    function openInVlcApp() {
+      const ch = allChannels[currentChannelIndex];
+      if (!ch) return;
+      window.location.href = `vlc://${ch.url}`;
+      showToast('Abriendo en VLC...', 'ph-broadcast');
+    }
+
+    function playPrevChannel() {
+      if (filteredChannels.length === 0) return;
+      const curId = allChannels[currentChannelIndex]?.id;
+      const idx = filteredChannels.findIndex(c => c.id === curId);
+      const prevIdx = idx > 0 ? idx - 1 : filteredChannels.length - 1;
+      selectChannel(filteredChannels[prevIdx].id, true);
+    }
+
+    function playNextChannel() {
+      if (filteredChannels.length === 0) return;
+      const curId = allChannels[currentChannelIndex]?.id;
+      const idx = filteredChannels.findIndex(c => c.id === curId);
+      const nextIdx = idx < filteredChannels.length - 1 ? idx + 1 : 0;
+      selectChannel(filteredChannels[nextIdx].id, true);
+    }
+
+    function renderChannelList() {
+      const container = document.getElementById('channels-wrapper');
+      container.innerHTML = '';
+      if (filteredChannels.length === 0) {
+        container.innerHTML = `<div class="text-center py-10 px-4 text-xs text-slate-500">No se encontraron canales</div>`;
+        return;
+      }
+      const curId = allChannels[currentChannelIndex]?.id;
+      filteredChannels.slice(0, 100).forEach(ch => {
+        const isPlaying = ch.id === curId;
+        const isFav = favorites.includes(ch.id);
+        const row = document.createElement('div');
+        row.className = `flex items-center justify-between p-2 rounded-xl border transition cursor-pointer ${
+          isPlaying ? 'bg-rose-600/15 border-rose-500/50' : 'bg-slate-800/40 hover:bg-slate-800/80 border-slate-800/80'
+        }`;
+        row.onclick = () => selectChannel(ch.id, true);
+        row.innerHTML = `
+          <div class="flex items-center gap-2.5 min-w-0 flex-1">
+            <div class="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-[10px] text-slate-300 shrink-0">
+              TV
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-bold ${isPlaying ? 'text-rose-400' : 'text-slate-100'} truncate">${ch.name}</div>
+              <div class="text-[10px] text-slate-400 truncate">${ch.epg}</div>
+            </div>
+          </div>
+          <button type="button" onclick="event.stopPropagation(); toggleFavorite('${ch.id}')" class="p-2 text-slate-500 hover:text-rose-500 cursor-pointer">
+            <i class="${isFav ? 'ph-fill text-rose-500' : 'ph'} ph-heart text-sm pointer-events-none"></i>
+          </button>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    function toggleFavorite(id) {
+      const i = favorites.indexOf(id);
+      if (i > -1) favorites.splice(i, 1);
+      else favorites.push(id);
+      localStorage.setItem('streamos_favs', JSON.stringify(favorites));
+      updateFavBadge();
+      updateCurrentFavButton(allChannels[currentChannelIndex]?.id);
+      applyFilters();
+    }
+
+    function toggleCurrentFavorite() {
+      const ch = allChannels[currentChannelIndex];
+      if (ch) toggleFavorite(ch.id);
+    }
+
+    function updateCurrentFavButton(id) {
+      const isFav = favorites.includes(id);
+      document.getElementById('bar-fav-btn').className = `p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 transition ${isFav ? 'text-rose-500' : 'text-slate-400'}`;
+    }
+
+    function updateFavBadge() {
+      const badge = document.getElementById('fav-count-badge');
+      if (favorites.length > 0) {
+        badge.textContent = favorites.length;
+        badge.classList.remove('hidden');
+      } else badge.classList.add('hidden');
+    }
+
+    function addToRecent(id) {
+      recentIds = [id, ...recentIds.filter(x => x !== id)].slice(0, 20);
+      localStorage.setItem('streamos_recent', JSON.stringify(recentIds));
+    }
+
+    function switchTab(tab) {
+      activeTab = tab;
+      ['all', 'favorites', 'recent'].forEach(t => {
+        const el = document.getElementById(`tab-${t}`);
+        if (!el) return;
+        if (t === tab) {
+          el.className = 'flex-1 flex flex-col items-center justify-center gap-1 py-1 text-rose-500 active:scale-95 transition cursor-pointer';
+          const icon = el.querySelector('i');
+          if (icon && t === 'all') icon.className = 'ph-fill ph-television-simple text-xl pointer-events-none';
+          if (icon && t === 'favorites') icon.className = 'ph-fill ph-heart text-xl pointer-events-none';
+          if (icon && t === 'recent') icon.className = 'ph-fill ph-clock-counter-clockwise text-xl pointer-events-none';
+        } else {
+          el.className = 'flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer';
+          const icon = el.querySelector('i');
+          if (icon && t === 'all') icon.className = 'ph ph-television-simple text-xl pointer-events-none';
+          if (icon && t === 'favorites') icon.className = 'ph ph-heart text-xl pointer-events-none';
+          if (icon && t === 'recent') icon.className = 'ph ph-clock-counter-clockwise text-xl pointer-events-none';
+        }
+      });
+      applyFilters();
+    }
+
+    function handleSearch() { applyFilters(); }
+    function clearSearch() { document.getElementById('search-input').value = ''; applyFilters(); }
+
+    function openPlaylistModal() { document.getElementById('playlist-modal').classList.remove('hidden'); }
+    function closePlaylistModal() { document.getElementById('playlist-modal').classList.add('hidden'); }
+
+    async function togglePiP() {
+      try {
+        if (document.pictureInPictureElement) await document.exitPictureInPicture();
+        else if (videoEl.webkitSupportsPresentationMode) videoEl.webkitSetPresentationMode('picture-in-picture');
+        else if (document.pictureInPictureEnabled) await videoEl.requestPictureInPicture();
+      } catch (e) { showToast('PiP no disponible', 'ph-info'); }
+    }
+
+    let toastTimeout = null;
+    function showToast(msg, icon = 'ph-check-circle') {
+      const t = document.getElementById('toast');
+      document.getElementById('toast-msg').textContent = msg;
+      document.getElementById('toast-icon').className = `ph-fill ${icon} text-emerald-400 text-sm`;
+      t.classList.remove('opacity-0', '-translate-y-2');
+      t.classList.add('opacity-100', 'translate-y-0');
+      if (toastTimeout) clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => {
+        t.classList.add('opacity-0', '-translate-y-2');
+        t.classList.remove('opacity-100', 'translate-y-0');
+      }, 2000);
+    }
+  </script>
+</body>
+</html>
