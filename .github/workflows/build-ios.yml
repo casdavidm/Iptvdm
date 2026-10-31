@@ -1,21 +1,126 @@
-import SwiftUI
-import AVFoundation
+name: Build Native Swift VLC IPA
 
-@main
-struct StreamOSApp: App {
-    init() {
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Audio error: \(error)")
-        }
-    }
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .preferredColorScheme(.dark)
-        }
-    }
-}
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        run: |
+          XCODE_PATH=$(find /Applications -maxdepth 1 -name "Xcode_*.app" | sort -V | tail -n 1)
+          echo "Using $XCODE_PATH"
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+
+      - name: Install Tools & XcodeGen
+        run: |
+          brew install xcodegen
+
+      - name: Generate Xcode Project Definition
+        run: |
+          cat << 'EOF' > project.yml
+          name: StreamOS
+          options:
+            bundleIdPrefix: com.casdavidm
+            deploymentTarget:
+              iOS: "14.0"
+          targets:
+            StreamOS:
+              type: application
+              platform: iOS
+              deploymentTarget: "14.0"
+              sources:
+                - path: StreamOSNative
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.casdavidm.streamos
+                  INFOPLIST_FILE: StreamOSNative/Info.plist
+                  IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+                  ENABLE_BITCODE: NO
+                  CODE_SIGNING_ALLOWED: NO
+                  CODE_SIGNING_REQUIRED: NO
+                  CODE_SIGN_IDENTITY: ""
+          EOF
+
+      - name: Generate Info.plist for Permissions
+        run: |
+          cat << 'EOF' > StreamOSNative/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDisplayName</key>
+            <string>StreamOS</string>
+            <key>CFBundleExecutable</key>
+            <string>$(EXECUTABLE_NAME)</string>
+            <key>CFBundleIdentifier</key>
+            <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>$(PRODUCT_NAME)</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>1.0</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+            <key>LSRequiresIPhoneOS</key>
+            <true/>
+            <key>UIRequiredDeviceCapabilities</key>
+            <array>
+              <string>arm64</string>
+            </array>
+            <key>NSAppTransportSecurity</key>
+            <dict>
+              <key>NSAllowsArbitraryLoads</key>
+              <true/>
+              <key>NSAllowsArbitraryLoadsInMedia</key>
+              <true/>
+              <key>NSAllowsLocalNetworking</key>
+              <true/>
+            </dict>
+            <key>UIBackgroundModes</key>
+            <array>
+              <string>audio</string>
+            </array>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Run XcodeGen & CocoaPods
+        run: |
+          xcodegen generate
+          pod install --repo-update
+
+      - name: Compile Native Application with VLC
+        run: |
+          xcodebuild clean build \
+            -workspace StreamOS.xcworkspace \
+            -scheme StreamOS \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package Native IPA
+        run: |
+          mkdir -p Payload
+          APP_PATH=$(find /Users/runner/Library/Developer/Xcode/DerivedData -name "StreamOS.app" -type d | head -n 1)
+          echo "Found app binary at: $APP_PATH"
+          cp -R "$APP_PATH" Payload/
+          zip -r StreamOS-NativeVLC.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StreamOS-NativeVLC-IPA
+          path: StreamOS-NativeVLC.ipa
