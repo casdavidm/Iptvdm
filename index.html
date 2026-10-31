@@ -4,16 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="referrer" content="no-referrer" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>StreamOS - IPTV Player</title>
-  <!-- Tailwind CSS -->
+  <title>StreamOS</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- HLS.js for universal stream playback -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-  <!-- Phosphor Icons -->
   <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  <!-- Google Font: Inter -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -32,10 +26,10 @@
       padding: 0;
     }
     .ios-header-safe {
-      padding-top: max(calc(env(safe-area-inset-top, 0px) + 10px), 44px);
+      padding-top: max(calc(env(safe-area-inset-top, 0px) + 6px), 42px);
     }
     .ios-bottom-safe {
-      padding-bottom: max(calc(env(safe-area-inset-bottom, 0px) + 8px), 14px);
+      padding-bottom: max(calc(env(safe-area-inset-bottom, 0px) + 8px), 18px);
     }
     .no-scrollbar::-webkit-scrollbar {
       display: none;
@@ -46,10 +40,10 @@
     }
     @keyframes pulse-live {
       0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.92); }
+      50% { opacity: 0.3; transform: scale(0.9); }
     }
     .live-dot {
-      animation: pulse-live 2s infinite ease-in-out;
+      animation: pulse-live 1.8s infinite ease-in-out;
     }
   </style>
 </head>
@@ -67,14 +61,14 @@
         <div>
           <div class="flex items-center gap-1.5">
             <h1 class="font-bold text-sm tracking-tight text-white leading-none">StreamOS</h1>
-            <span id="server-status-pill" class="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">NATIVO</span>
+            <span class="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">NATIVO</span>
           </div>
-          <p id="playlist-stats" class="text-[10px] text-slate-400 mt-0.5">Listo para conectar</p>
+          <p id="playlist-stats" class="text-[10px] text-slate-400 mt-0.5">Listo</p>
         </div>
       </div>
 
       <div class="flex items-center gap-1.5">
-        <button type="button" onclick="refreshAutoChannels()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition active:scale-95" title="Recargar Lista">
+        <button type="button" onclick="refreshAutoChannels()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition active:scale-95" title="Recargar">
           <i class="ph ph-arrows-clockwise text-base pointer-events-none"></i>
         </button>
         <button type="button" onclick="togglePiP()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition active:scale-95" title="Picture in Picture">
@@ -89,42 +83,48 @@
 
     <!-- Player Video Box -->
     <div class="relative w-full aspect-video bg-black flex-shrink-0 overflow-hidden border-b border-slate-800">
-      <video id="video-player" class="w-full h-full object-contain bg-black" playsinline webkit-playsinline x5-playsinline controls preload="auto"></video>
+      <video 
+        id="video-player" 
+        class="w-full h-full object-contain bg-black" 
+        playsinline 
+        webkit-playsinline 
+        controls 
+        preload="auto"
+      ></video>
 
       <!-- Loading Overlay -->
       <div id="player-loader" class="hidden absolute inset-0 bg-black/80 backdrop-blur-xs flex flex-col items-center justify-center z-10 pointer-events-none">
         <div class="w-8 h-8 border-3 border-rose-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-        <span id="player-loader-text" class="text-[11px] font-medium text-slate-200">Abriendo stream...</span>
+        <span id="player-loader-text" class="text-[11px] font-medium text-slate-200">Cargando canal...</span>
       </div>
 
-      <!-- Playback Error / Action Overlay -->
-      <div id="player-error" class="hidden absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-4 text-center z-10 space-y-3">
-        <div class="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+      <!-- Playback Actions Overlay -->
+      <div id="player-error" class="hidden absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-3 text-center z-10 space-y-2">
+        <div class="w-9 h-9 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
           <i class="ph-fill ph-play-circle text-2xl pointer-events-none"></i>
         </div>
         <div>
           <h3 class="text-xs font-bold text-white">Iniciar Reproducción</h3>
-          <p class="text-[10px] text-slate-400 max-w-[280px] mt-1 leading-snug">
-            Toca el botón verde para activar el canal con el reproductor nativo de iOS:
+          <p id="error-reason-text" class="text-[10px] text-slate-400 max-w-[280px] mt-0.5 leading-snug">
+            Toca una de las opciones para sintonizar:
           </p>
         </div>
 
-        <div class="flex flex-col gap-2 w-full max-w-[290px]">
-          <button type="button" onclick="openDirectNativeStream()" class="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 active:scale-95">
-            <i class="ph-fill ph-play text-sm pointer-events-none"></i>
+        <div class="flex flex-col gap-1.5 w-full max-w-[260px]">
+          <button type="button" onclick="forceNativePlay()" class="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition flex items-center justify-center gap-1.5 shadow-md active:scale-95">
+            <i class="ph-bold ph-play text-xs pointer-events-none"></i>
             <span>Reproducir Pantalla Completa</span>
           </button>
-          
-          <div class="grid grid-cols-2 gap-2">
-            <button type="button" onclick="retryDirectHls()" class="py-2 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] font-semibold text-slate-300 transition flex items-center justify-center gap-1 active:scale-95">
-              <i class="ph-bold ph-arrow-clockwise pointer-events-none"></i>
-              <span>Reintentar</span>
-            </button>
-            <button type="button" onclick="openInVlcApp()" class="py-2 px-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-[10px] font-semibold text-white transition flex items-center justify-center gap-1 active:scale-95">
-              <i class="ph-bold ph-broadcast pointer-events-none"></i>
-              <span>Abrir en VLC</span>
-            </button>
-          </div>
+
+          <button type="button" onclick="switchStreamFormat()" class="w-full py-1.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white transition flex items-center justify-center gap-1.5 shadow-md active:scale-95">
+            <i class="ph-bold ph-swap text-xs pointer-events-none"></i>
+            <span id="btn-format-toggle-text">Cambiar Formato (HLS / TS)</span>
+          </button>
+
+          <button type="button" onclick="openInVlcApp()" class="w-full py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-amber-400 transition flex items-center justify-center gap-1.5 border border-slate-700 active:scale-95">
+            <i class="ph-bold ph-broadcast text-xs pointer-events-none"></i>
+            <span>Abrir en VLC</span>
+          </button>
         </div>
       </div>
 
@@ -137,7 +137,7 @@
           </span>
           <span id="now-playing-title" class="text-xs font-semibold text-white truncate max-w-[190px]">Selecciona un canal</span>
         </div>
-        <span id="now-playing-cat" class="text-[10px] font-medium px-2 py-0.5 rounded bg-white/15 text-slate-200 backdrop-blur-md">VEO TV</span>
+        <span id="now-playing-format-badge" class="text-[9px] font-mono px-2 py-0.5 rounded bg-white/15 text-slate-200 backdrop-blur-md">HLS</span>
       </div>
     </div>
 
@@ -149,7 +149,7 @@
         </div>
         <div class="truncate">
           <div id="bar-channel-name" class="font-bold text-white text-xs truncate">Listo</div>
-          <div id="bar-channel-epg" class="text-[10px] text-slate-400 truncate">Toca cualquier canal de la lista</div>
+          <div id="bar-channel-epg" class="text-[10px] text-slate-400 truncate">Toca cualquier canal para ver</div>
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
@@ -186,14 +186,14 @@
     <!-- Channel List Container -->
     <div id="channels-wrapper" class="flex-1 overflow-y-auto px-3 py-2 space-y-1.5"></div>
 
-    <!-- Fixed Bottom Tab Bar -->
+    <!-- Bottom Tab Navigation -->
     <nav class="bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-4 pt-2.5 ios-bottom-safe flex items-center justify-around w-full z-30 flex-shrink-0">
-      <button type="button" onclick="switchTab('all')" id="tab-all" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-rose-500 active:scale-95 transition cursor-pointer">
+      <button type="button" onclick="switchTab('all')" id="tab-all" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-rose-500 active:scale-95 transition">
         <i class="ph-fill ph-television-simple text-xl pointer-events-none"></i>
         <span class="text-[10px] font-medium pointer-events-none">Live TV</span>
       </button>
 
-      <button type="button" onclick="switchTab('favorites')" id="tab-favorites" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition relative cursor-pointer">
+      <button type="button" onclick="switchTab('favorites')" id="tab-favorites" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition relative">
         <div class="relative pointer-events-none">
           <i class="ph ph-heart text-xl pointer-events-none"></i>
           <span id="fav-count-badge" class="hidden absolute -top-1 -right-2 bg-rose-600 text-white text-[8px] font-bold px-1 rounded-full">0</span>
@@ -201,12 +201,12 @@
         <span class="text-[10px] font-medium pointer-events-none">Favoritos</span>
       </button>
 
-      <button type="button" onclick="switchTab('recent')" id="tab-recent" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer">
+      <button type="button" onclick="switchTab('recent')" id="tab-recent" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition">
         <i class="ph ph-clock-counter-clockwise text-xl pointer-events-none"></i>
         <span class="text-[10px] font-medium pointer-events-none">Recientes</span>
       </button>
 
-      <button type="button" onclick="openPlaylistModal()" id="tab-playlists" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer">
+      <button type="button" onclick="openPlaylistModal()" id="tab-playlists" class="flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition">
         <i class="ph ph-gear text-xl pointer-events-none"></i>
         <span class="text-[10px] font-medium pointer-events-none">Ajustes</span>
       </button>
@@ -220,9 +220,9 @@
       </div>
     </div>
 
-    <!-- Settings / Server Config Modal -->
-    <div id="playlist-modal" class="hidden fixed inset-0 z-40 bg-black/75 backdrop-blur-xs flex items-end justify-center p-0">
-      <div class="bg-slate-900 border border-slate-800 w-full max-w-md rounded-t-3xl p-4 pb-8 shadow-2xl space-y-3.5 max-h-[85dvh] overflow-y-auto">
+    <!-- Server Settings Modal -->
+    <div id="playlist-modal" class="hidden fixed inset-0 z-40 bg-black/80 backdrop-blur-xs flex items-end justify-center p-0">
+      <div class="bg-slate-900 border border-slate-800 w-full max-w-md rounded-t-3xl p-4 pb-8 shadow-2xl space-y-3.5 max-h-[90dvh] overflow-y-auto">
         <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
           <div class="flex items-center gap-2">
             <i class="ph-fill ph-gear text-rose-500 text-lg"></i>
@@ -233,16 +233,16 @@
           </button>
         </div>
 
-        <!-- Mode Tabs -->
-        <div class="flex bg-slate-800 p-1 rounded-xl">
-          <button type="button" onclick="setModalTab('xtream')" id="btn-modal-xtream" class="flex-1 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 text-white transition">Xtream API</button>
-          <button type="button" onclick="setModalTab('m3u')" id="btn-modal-m3u" class="flex-1 py-1.5 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition">URL M3U Directa</button>
+        <!-- Connection Type Selector -->
+        <div class="grid grid-cols-2 gap-1.5 bg-slate-800/60 p-1 rounded-xl">
+          <button type="button" onclick="setConnMode('xtream')" id="btn-mode-xtream" class="py-1.5 rounded-lg text-xs font-semibold bg-rose-600 text-white transition">Xtream API</button>
+          <button type="button" onclick="setConnMode('m3u')" id="btn-mode-m3u" class="py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition">Enlace M3U</button>
         </div>
 
-        <!-- Tab 1: Xtream Inputs -->
-        <div id="view-xtream-inputs" class="space-y-2.5">
+        <!-- Xtream Inputs -->
+        <div id="section-xtream" class="space-y-2.5">
           <div>
-            <label class="text-[10px] font-semibold text-slate-400 block mb-0.5">Servidor URL (con puerto)</label>
+            <label class="text-[10px] font-semibold text-slate-400 block mb-0.5">Servidor URL</label>
             <input type="text" id="xc-url-input" placeholder="http://veotv.info:8880" value="http://veotv.info:8880" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-rose-500" />
           </div>
           <div class="grid grid-cols-2 gap-2">
@@ -255,37 +255,27 @@
               <input type="password" id="xc-pass-input" placeholder="••••••••" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-rose-500" />
             </div>
           </div>
-
-          <div class="pt-2">
-            <button type="button" onclick="saveAndConnectXtream()" id="xc-login-btn" class="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-md shadow-rose-600/25 transition flex items-center justify-center gap-1.5">
-              <i class="ph-bold ph-plug text-xs"></i>
-              <span>Conectar Servidor Xtream</span>
-            </button>
-          </div>
         </div>
 
-        <!-- Tab 2: Direct M3U Input -->
-        <div id="view-m3u-inputs" class="hidden space-y-2.5">
+        <!-- M3U Input -->
+        <div id="section-m3u" class="hidden space-y-2.5">
           <div>
-            <label class="text-[10px] font-semibold text-slate-400 block mb-0.5">Enlace M3U Plus</label>
-            <input type="url" id="m3u-url-input" placeholder="http://servidor.com/get.php?username=...&password=...&type=m3u_plus&output=m3u8" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-rose-500" />
-            <p class="text-[10px] text-slate-400 mt-1">Descarga directa de lista sin límites de proxy.</p>
-          </div>
-
-          <div class="pt-2">
-            <button type="button" onclick="connectDirectM3U()" id="m3u-login-btn" class="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-md shadow-rose-600/25 transition flex items-center justify-center gap-1.5">
-              <i class="ph-bold ph-download-simple text-xs"></i>
-              <span>Descargar Lista M3U</span>
-            </button>
+            <label class="text-[10px] font-semibold text-slate-400 block mb-0.5">URL M3U o M3U_PLUS</label>
+            <input type="text" id="m3u-url-input" placeholder="http://veotv.info:8880/get.php?username=...&password=...&type=m3u_plus" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-rose-500" />
           </div>
         </div>
 
-        <!-- Status Helper -->
-        <div id="modal-status-box" class="hidden p-2 rounded-xl bg-slate-800/80 border border-slate-700/80 text-[11px] text-slate-300 flex items-center gap-2">
-          <i id="modal-status-icon" class="ph ph-spinner animate-spin text-rose-400 text-sm"></i>
-          <span id="modal-status-text">Procesando...</span>
+        <div class="pt-1">
+          <button type="button" onclick="connectActiveMode()" id="xc-login-btn" class="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shadow-md shadow-rose-600/25 transition flex items-center justify-center gap-1.5 active:scale-95">
+            <i class="ph-bold ph-plug text-xs"></i>
+            <span>Conectar y Sincronizar Canales</span>
+          </button>
         </div>
 
+        <div id="modal-status-box" class="hidden p-2.5 rounded-xl bg-slate-800/80 border border-slate-700/80 text-[11px] text-slate-300 flex items-start gap-2">
+          <i id="modal-status-icon" class="ph ph-spinner animate-spin text-rose-400 text-sm mt-0.5 shrink-0"></i>
+          <span id="modal-status-text" class="break-words">Conectando...</span>
+        </div>
       </div>
     </div>
 
@@ -297,20 +287,31 @@
     let currentChannelIndex = -1;
     let activeCategory = 'All';
     let activeTab = 'all';
+    let connMode = 'xtream';
     let favorites = JSON.parse(localStorage.getItem('streamos_favs') || '[]');
     let recentIds = JSON.parse(localStorage.getItem('streamos_recent') || '[]');
     let hlsInstance = null;
-    let connectionTimeout = null;
+    let currentMode = 'hls';
 
     const videoEl = document.getElementById('video-player');
     const loaderEl = document.getElementById('player-loader');
     const loaderTextEl = document.getElementById('player-loader-text');
     const errorEl = document.getElementById('player-error');
 
+    // Motor de red universal: usa Capacitor Native HTTP si está disponible, con fallback a fetch
+    async function universalHttp(url) {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Http) {
+        const res = await window.Capacitor.Plugins.Http.get({ url: url });
+        return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      }
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
+    }
+
     window.onload = function() {
       updateFavBadge();
 
-      // Cargar credenciales guardadas
       const savedXc = JSON.parse(localStorage.getItem('streamos_xc_creds') || 'null');
       if (savedXc) {
         document.getElementById('xc-url-input').value = savedXc.serverUrl || 'http://veotv.info:8880';
@@ -318,36 +319,31 @@
         document.getElementById('xc-pass-input').value = savedXc.password || '';
       }
 
-      // Cargar canales cacheados
       const savedStreams = JSON.parse(localStorage.getItem('streamos_saved_channels') || 'null');
       if (Array.isArray(savedStreams) && savedStreams.length > 0) {
         allChannels = savedStreams;
         renderCategories();
         applyFilters();
-        if (allChannels.length > 0) {
-          selectChannel(allChannels[0].id, false);
-        }
-      } else {
-        openPlaylistModal();
       }
     };
 
-    function setModalTab(tab) {
-      const btnX = document.getElementById('btn-modal-xtream');
-      const btnM = document.getElementById('btn-modal-m3u');
-      const viewX = document.getElementById('view-xtream-inputs');
-      const viewM = document.getElementById('view-m3u-inputs');
+    function setConnMode(mode) {
+      connMode = mode;
+      const bX = document.getElementById('btn-mode-xtream');
+      const bM = document.getElementById('btn-mode-m3u');
+      const sX = document.getElementById('section-xtream');
+      const sM = document.getElementById('section-m3u');
 
-      if (tab === 'xtream') {
-        btnX.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 text-white transition';
-        btnM.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition';
-        viewX.classList.remove('hidden');
-        viewM.classList.add('hidden');
+      if (mode === 'xtream') {
+        bX.className = 'py-1.5 rounded-lg text-xs font-semibold bg-rose-600 text-white transition';
+        bM.className = 'py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition';
+        sX.classList.remove('hidden');
+        sM.classList.add('hidden');
       } else {
-        btnM.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 text-white transition';
-        btnX.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition';
-        viewM.classList.remove('hidden');
-        viewX.classList.add('hidden');
+        bM.className = 'py-1.5 rounded-lg text-xs font-semibold bg-rose-600 text-white transition';
+        bX.className = 'py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition';
+        sM.classList.remove('hidden');
+        sX.classList.add('hidden');
       }
     }
 
@@ -357,222 +353,166 @@
       const ico = document.getElementById('modal-status-icon');
       box.classList.remove('hidden');
       txt.textContent = text;
-      ico.className = isSpinning ? 'ph ph-spinner animate-spin text-rose-400 text-sm' : 'ph ph-warning text-amber-400 text-sm';
+      ico.className = isSpinning ? 'ph ph-spinner animate-spin text-rose-400 text-sm mt-0.5 shrink-0' : 'ph ph-warning text-amber-400 text-sm mt-0.5 shrink-0';
     }
 
-    function hideModalStatus() {
-      document.getElementById('modal-status-box').classList.add('hidden');
+    function cleanUrl(u) {
+      let c = (u || '').trim().replace(/\/+$/, '');
+      if (!/^https?:\/\//i.test(c)) c = 'http://' + c;
+      return c;
     }
 
-    function refreshAutoChannels() {
-      const savedXc = JSON.parse(localStorage.getItem('streamos_xc_creds') || 'null');
-      if (savedXc && savedXc.serverUrl && savedXc.username && savedXc.password) {
-        showToast('Actualizando canales...', 'ph-arrows-clockwise');
-        autoSyncXtream(savedXc);
+    async function connectActiveMode() {
+      if (connMode === 'm3u') {
+        await connectM3uMode();
       } else {
-        openPlaylistModal();
+        await connectXtreamMode();
       }
     }
 
-    async function fetchWithMultiProxy(targetUrl, timeoutMs = 18000) {
-      // Si corre dentro de la App Nativa iOS (Capacitor), fetch directo sin proxys intermediarios
-      if (window.Capacitor) {
-        const res = await fetch(targetUrl);
-        return await res.text();
-      }
-
-      const proxies = [
-        (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-        (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
-        (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`
-      ];
-
-      for (let i = 0; i < proxies.length; i++) {
-        showModalStatus(`Conectando túnel #${i + 1}...`);
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-        try {
-          const reqUrl = proxies[i](targetUrl);
-          const res = await fetch(reqUrl, { 
-            signal: controller.signal, 
-            referrerPolicy: 'no-referrer',
-            headers: { 'Accept': '*/*' }
-          });
-          clearTimeout(timer);
-
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text.length > 20) {
-              return text;
-            }
-          }
-        } catch (e) {
-          clearTimeout(timer);
-        }
-      }
-      throw new Error('No se pudo establecer conexión');
-    }
-
-    async function autoSyncXtream(creds) {
-      let baseUrl = creds.serverUrl.trim().replace(/\/+$/, '');
-      if (!/^https?:\/\//i.test(baseUrl)) baseUrl = 'http://' + baseUrl;
-
-      try {
-        const apiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(creds.username)}&password=${encodeURIComponent(creds.password)}&action=get_live_streams`;
-        showModalStatus('Solicitando canales...');
-        
-        let rawData = null;
-        try {
-          rawData = await fetchWithMultiProxy(apiUrl, 15000);
-        } catch (e) {
-          showModalStatus('Probando descarga directa M3U...');
-          const m3uUrl = `${baseUrl}/get.php?username=${encodeURIComponent(creds.username)}&password=${encodeURIComponent(creds.password)}&type=m3u_plus&output=m3u8`;
-          rawData = await fetchWithMultiProxy(m3uUrl, 25000);
-          if (rawData && rawData.includes('#EXTM3U')) {
-            parseAndLoadM3U(rawData);
-            return;
-          }
-        }
-
-        if (rawData) {
-          let streams;
-          try {
-            streams = JSON.parse(rawData);
-          } catch(e) {
-            if (rawData.includes('#EXTM3U')) {
-              parseAndLoadM3U(rawData);
-              return;
-            }
-          }
-
-          if (Array.isArray(streams) && streams.length > 0) {
-            allChannels = streams.map((st, idx) => {
-              const rawName = st.name || `Canal ${idx + 1}`;
-              let cat = 'Live TV';
-              const match = rawName.match(/^([A-Za-z0-9\s★\-]{2,14})[|:\-]/);
-              if (match) cat = match[1].trim();
-
-              const hlsUrl = `${baseUrl}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${st.stream_id}.m3u8`;
-              const tsUrl = `${baseUrl}/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${st.stream_id}`;
-
-              return {
-                id: `xc-${st.stream_id || idx}`,
-                name: rawName,
-                category: cat,
-                epg: `#${st.num || idx + 1} • En Vivo`,
-                url: hlsUrl,
-                directUrl: tsUrl
-              };
-            });
-
-            localStorage.setItem('streamos_saved_channels', JSON.stringify(allChannels.slice(0, 1500)));
-            renderCategories();
-            applyFilters();
-            showToast(`${allChannels.length} canales cargados`, 'ph-check-circle');
-            hideModalStatus();
-            closePlaylistModal();
-
-            if (currentChannelIndex === -1 && allChannels.length > 0) {
-              selectChannel(allChannels[0].id, false);
-            }
-            return;
-          }
-        }
-        throw new Error('Respuesta inválida');
-      } catch (err) {
-        showModalStatus('Error: Verifica usuario, contraseña y puerto (8880)', false);
-        showToast('Error conectando', 'ph-warning');
-      }
-    }
-
-    function parseAndLoadM3U(content) {
-      const lines = content.split(/\r?\n/);
-      const parsed = [];
-      let tempName = 'Canal';
-      let tempCat = 'Live TV';
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (line.startsWith('#EXTINF:')) {
-          const catMatch = line.match(/group-title="([^"]+)"/i);
-          if (catMatch) tempCat = catMatch[1].trim();
-
-          const commaIdx = line.lastIndexOf(',');
-          if (commaIdx !== -1) tempName = line.substring(commaIdx + 1).trim();
-        } else if (line.length > 10 && !line.startsWith('#')) {
-          parsed.push({
-            id: `m3u-${parsed.length}`,
-            name: tempName,
-            category: tempCat,
-            epg: 'En Vivo',
-            url: line,
-            directUrl: line
-          });
-          tempName = 'Canal ' + (parsed.length + 1);
-          tempCat = 'Live TV';
-        }
-      }
-
-      if (parsed.length > 0) {
-        allChannels = parsed;
-        localStorage.setItem('streamos_saved_channels', JSON.stringify(allChannels.slice(0, 1500)));
-        renderCategories();
-        applyFilters();
-        showToast(`${allChannels.length} canales cargados`, 'ph-check-circle');
-        hideModalStatus();
-        closePlaylistModal();
-        if (allChannels.length > 0) selectChannel(allChannels[0].id, false);
-      } else {
-        showModalStatus('No se encontraron canales en el M3U', false);
-      }
-    }
-
-    async function saveAndConnectXtream() {
-      let baseUrl = document.getElementById('xc-url-input').value.trim();
+    async function connectXtreamMode() {
+      const rawUrl = document.getElementById('xc-url-input').value;
       const username = document.getElementById('xc-user-input').value.trim();
       const password = document.getElementById('xc-pass-input').value.trim();
 
-      if (!baseUrl || !username || !password) {
+      if (!rawUrl || !username || !password) {
         showToast('Completa todos los campos', 'ph-warning');
         return;
       }
-      if (!/^https?:\/\//i.test(baseUrl)) baseUrl = 'http://' + baseUrl;
 
-      const creds = { serverUrl: baseUrl, username, password };
-      localStorage.setItem('streamos_xc_creds', JSON.stringify(creds));
+      const baseUrl = cleanUrl(rawUrl);
+      localStorage.setItem('streamos_xc_creds', JSON.stringify({ serverUrl: baseUrl, username, password }));
 
-      const btn = document.getElementById('xc-login-btn');
-      const orig = btn.innerHTML;
-      btn.innerHTML = `<i class="ph ph-spinner animate-spin text-xs"></i><span>Conectando...</span>`;
+      showModalStatus('Conectando vía motor nativo iOS...');
+      const apiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&action=get_live_streams`;
 
       try {
-        await autoSyncXtream(creds);
-      } finally {
-        btn.innerHTML = orig;
+        const rawData = await universalHttp(apiUrl);
+        let streams = null;
+        try {
+          streams = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
+        } catch (e) {}
+
+        if (Array.isArray(streams) && streams.length > 0) {
+          processStreams(streams, baseUrl, username, password);
+          return;
+        }
+
+        // Si la API JSON no responde lista, probar enlace directo M3U Plus
+        showModalStatus('Descargando lista por canal M3U Plus...');
+        const m3uUrl = `${baseUrl}/get.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&type=m3u_plus&output=ts`;
+        await loadFromM3uUrl(m3uUrl, baseUrl, username, password);
+      } catch (err) {
+        // Fallback inmediato a M3U Plus nativo
+        try {
+          showModalStatus('Sincronizando por túnel M3U directo...');
+          const m3uUrl = `${baseUrl}/get.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&type=m3u_plus&output=ts`;
+          await loadFromM3uUrl(m3uUrl, baseUrl, username, password);
+        } catch (e2) {
+          showModalStatus(`Error: ${e2.message || 'Verifica credenciales'}`, false);
+          showToast('Error de conexión', 'ph-warning');
+        }
       }
     }
 
-    async function connectDirectM3U() {
+    async function connectM3uMode() {
       const url = document.getElementById('m3u-url-input').value.trim();
       if (!url) {
         showToast('Ingresa la URL M3U', 'ph-warning');
         return;
       }
+      showModalStatus('Descargando lista M3U con red nativa...');
+      await loadFromM3uUrl(url);
+    }
 
-      const btn = document.getElementById('m3u-login-btn');
-      const orig = btn.innerHTML;
-      btn.innerHTML = `<i class="ph ph-spinner animate-spin text-xs"></i><span>Descargando...</span>`;
-
+    async function loadFromM3uUrl(m3uUrl, baseUrl = '', user = '', pass = '') {
       try {
-        showModalStatus('Descargando lista M3U...');
-        const text = await fetchWithMultiProxy(url, 25000);
-        parseAndLoadM3U(text);
+        const text = await universalHttp(m3uUrl);
+        const parsed = parseM3U(text, baseUrl, user, pass);
+
+        if (parsed.length > 0) {
+          allChannels = parsed;
+          localStorage.setItem('streamos_saved_channels', JSON.stringify(allChannels.slice(0, 1800)));
+          renderCategories();
+          applyFilters();
+          showToast(`${allChannels.length} canales listos`, 'ph-check-circle');
+          closePlaylistModal();
+        } else {
+          throw new Error('Lista vacía o sin canales válidos');
+        }
       } catch (e) {
-        showModalStatus('Error al descargar la lista', false);
-        showToast('Error al descargar lista', 'ph-warning');
-      } finally {
-        btn.innerHTML = orig;
+        showModalStatus(`Error al descargar: ${e.message}`, false);
+        showToast('Error al procesar canales', 'ph-warning');
+      }
+    }
+
+    function parseM3U(content, baseUrl, user, pass) {
+      const lines = content.split('\n');
+      const channels = [];
+      let temp = {};
+
+      for (let line of lines) {
+        line = line.trim();
+        if (line.startsWith('#EXTINF:')) {
+          const nameMatch = line.match(/,(.+)$/);
+          const groupMatch = line.match(/group-title="([^"]+)"/i);
+          temp.name = nameMatch ? nameMatch[1].trim() : 'Canal';
+          temp.category = groupMatch ? groupMatch[1].trim() : 'General';
+        } else if (line.startsWith('http')) {
+          const id = `ch-${channels.length + 1}`;
+          const isHls = line.includes('.m3u8');
+          channels.push({
+            id: id,
+            name: temp.name || `Canal ${channels.length + 1}`,
+            category: temp.category || 'Live TV',
+            epg: `#${channels.length + 1} • En Vivo`,
+            hlsUrl: isHls ? line : line.replace(/\.ts$/i, '.m3u8'),
+            tsUrl: isHls ? line.replace(/\.m3u8$/i, '') : line,
+            url: line
+          });
+          temp = {};
+          if (channels.length >= 2500) break;
+        }
+      }
+      return channels;
+    }
+
+    function processStreams(streams, baseUrl, user, pass) {
+      allChannels = streams.map((st, idx) => {
+        const rawName = st.name || `Canal ${idx + 1}`;
+        let cat = 'Live TV';
+        const match = rawName.match(/^([A-Za-z0-9\s★\-]{2,14})[|:\-]/);
+        if (match) cat = match[1].trim();
+
+        const streamId = st.stream_id || idx;
+        const hlsUrl = `${baseUrl}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${streamId}.m3u8`;
+        const tsUrl = `${baseUrl}/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${streamId}`;
+
+        return {
+          id: `xc-${streamId}`,
+          name: rawName,
+          category: cat,
+          epg: `#${st.num || idx + 1} • En Vivo`,
+          hlsUrl: hlsUrl,
+          tsUrl: tsUrl,
+          url: hlsUrl
+        };
+      });
+
+      localStorage.setItem('streamos_saved_channels', JSON.stringify(allChannels.slice(0, 1800)));
+      renderCategories();
+      applyFilters();
+      showToast(`${allChannels.length} canales listos`, 'ph-check-circle');
+      closePlaylistModal();
+    }
+
+    function refreshAutoChannels() {
+      const savedXc = JSON.parse(localStorage.getItem('streamos_xc_creds') || 'null');
+      if (savedXc) {
+        showToast('Actualizando canales...', 'ph-arrows-clockwise');
+        connectXtreamMode();
+      } else {
+        openPlaylistModal();
       }
     }
 
@@ -633,7 +573,6 @@
       const ch = allChannels[idx];
 
       document.getElementById('now-playing-title').textContent = ch.name;
-      document.getElementById('now-playing-cat').textContent = ch.category || 'En Vivo';
       document.getElementById('bar-channel-name').textContent = ch.name;
       document.getElementById('bar-channel-epg').textContent = ch.epg;
 
@@ -641,14 +580,11 @@
       addToRecent(ch.id);
       renderChannelList();
 
-      loadVideoStream(ch.url, autoPlay);
+      currentMode = 'hls';
+      playStreamWithMode(ch);
     }
 
     function destroyActivePlayer() {
-      if (connectionTimeout) {
-        clearTimeout(connectionTimeout);
-        connectionTimeout = null;
-      }
       if (hlsInstance) {
         try { hlsInstance.destroy(); } catch (e) {}
         hlsInstance = null;
@@ -658,89 +594,85 @@
       videoEl.load();
     }
 
-    function loadVideoStream(streamUrl, autoPlay = true) {
+    function playStreamWithMode(ch) {
       errorEl.classList.add('hidden');
       loaderEl.classList.remove('hidden');
       loaderTextEl.textContent = 'Conectando canal...';
       destroyActivePlayer();
 
-      connectionTimeout = setTimeout(() => {
+      const targetUrl = (currentMode === 'hls') ? (ch.hlsUrl || ch.url) : (ch.tsUrl || ch.url);
+      document.getElementById('now-playing-format-badge').textContent = currentMode.toUpperCase();
+
+      let timeout = setTimeout(() => {
         loaderEl.classList.add('hidden');
         errorEl.classList.remove('hidden');
-      }, 4500);
+      }, 7000);
 
-      // Reproducción nativa HLS de Apple en iOS
-      if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-        videoEl.src = streamUrl;
+      const onReady = () => {
+        clearTimeout(timeout);
+        loaderEl.classList.add('hidden');
+        errorEl.classList.add('hidden');
+        videoEl.play().catch(() => {});
+      };
 
-        const onPlaying = () => {
-          if (connectionTimeout) clearTimeout(connectionTimeout);
-          loaderEl.classList.add('hidden');
-          errorEl.classList.add('hidden');
-          cleanup();
-        };
+      const onError = () => {
+        clearTimeout(timeout);
+        loaderEl.classList.add('hidden');
+        errorEl.classList.remove('hidden');
+      };
 
-        const onError = () => {
-          if (connectionTimeout) clearTimeout(connectionTimeout);
+      // Reproducción nativa en iOS (WebKit AVPlayer)
+      if (videoEl.canPlayType('application/vnd.apple.mpegurl') || currentMode === 'ts') {
+        videoEl.src = targetUrl;
+        videoEl.onplaying = onReady;
+        videoEl.onloadeddata = onReady;
+        videoEl.onerror = onError;
+        videoEl.play().catch(() => {
           loaderEl.classList.add('hidden');
           errorEl.classList.remove('hidden');
-          cleanup();
-        };
-
-        const cleanup = () => {
-          videoEl.removeEventListener('playing', onPlaying);
-          videoEl.removeEventListener('loadedmetadata', onPlaying);
-          videoEl.removeEventListener('error', onError);
-        };
-
-        videoEl.addEventListener('playing', onPlaying);
-        videoEl.addEventListener('loadedmetadata', onPlaying);
-        videoEl.addEventListener('error', onError);
-
-        if (autoPlay) {
-          videoEl.play().catch(() => {});
-        }
+        });
         return;
       }
 
-      // Soporte HLS.js
+      // HLS.js
       if (Hls.isSupported()) {
         hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: true });
-        hlsInstance.loadSource(streamUrl);
+        hlsInstance.loadSource(targetUrl);
         hlsInstance.attachMedia(videoEl);
-
-        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-          if (connectionTimeout) clearTimeout(connectionTimeout);
-          loaderEl.classList.add('hidden');
-          if (autoPlay) videoEl.play().catch(() => {});
-        });
-
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, onReady);
         hlsInstance.on(Hls.Events.ERROR, (e, data) => {
-          if (data.fatal) {
-            if (connectionTimeout) clearTimeout(connectionTimeout);
-            loaderEl.classList.add('hidden');
-            errorEl.classList.remove('hidden');
-          }
+          if (data.fatal) onError();
         });
       }
     }
 
-    function retryDirectHls() {
+    function forceNativePlay() {
       const ch = allChannels[currentChannelIndex];
       if (!ch) return;
-      loadVideoStream(ch.url, true);
+      errorEl.classList.add('hidden');
+      videoEl.src = ch.hlsUrl || ch.url;
+      videoEl.play().catch(() => {
+        videoEl.src = ch.tsUrl;
+        videoEl.play();
+      });
+      if (videoEl.webkitEnterFullscreen) {
+        videoEl.webkitEnterFullscreen();
+      }
     }
 
-    function openDirectNativeStream() {
+    function switchStreamFormat() {
       const ch = allChannels[currentChannelIndex];
       if (!ch) return;
-      window.location.href = ch.url;
+      currentMode = (currentMode === 'hls') ? 'ts' : 'hls';
+      showToast(`Modo ${currentMode.toUpperCase()}`, 'ph-swap');
+      playStreamWithMode(ch);
     }
 
     function openInVlcApp() {
       const ch = allChannels[currentChannelIndex];
       if (!ch) return;
-      window.location.href = `vlc://${ch.url}`;
+      const targetUrl = ch.tsUrl || ch.url;
+      window.location.href = `vlc://${targetUrl}`;
       showToast('Abriendo en VLC...', 'ph-broadcast');
     }
 
@@ -764,7 +696,7 @@
       const container = document.getElementById('channels-wrapper');
       container.innerHTML = '';
       if (filteredChannels.length === 0) {
-        container.innerHTML = `<div class="text-center py-10 px-4 text-xs text-slate-500">No se encontraron canales</div>`;
+        container.innerHTML = `<div class="text-center py-10 px-4 text-xs text-slate-500">No hay canales cargados. Pulsa Ajustes para conectar.</div>`;
         return;
       }
       const curId = allChannels[currentChannelIndex]?.id;
@@ -834,16 +766,8 @@
         if (!el) return;
         if (t === tab) {
           el.className = 'flex-1 flex flex-col items-center justify-center gap-1 py-1 text-rose-500 active:scale-95 transition cursor-pointer';
-          const icon = el.querySelector('i');
-          if (icon && t === 'all') icon.className = 'ph-fill ph-television-simple text-xl pointer-events-none';
-          if (icon && t === 'favorites') icon.className = 'ph-fill ph-heart text-xl pointer-events-none';
-          if (icon && t === 'recent') icon.className = 'ph-fill ph-clock-counter-clockwise text-xl pointer-events-none';
         } else {
           el.className = 'flex-1 flex flex-col items-center justify-center gap-1 py-1 text-slate-400 hover:text-slate-200 active:scale-95 transition cursor-pointer';
-          const icon = el.querySelector('i');
-          if (icon && t === 'all') icon.className = 'ph ph-television-simple text-xl pointer-events-none';
-          if (icon && t === 'favorites') icon.className = 'ph ph-heart text-xl pointer-events-none';
-          if (icon && t === 'recent') icon.className = 'ph ph-clock-counter-clockwise text-xl pointer-events-none';
         }
       });
       applyFilters();
