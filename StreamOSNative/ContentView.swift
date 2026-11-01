@@ -156,7 +156,7 @@ class IPTVManager: ObservableObject {
                     catsSet.insert(cat)
 
                     let hls = "\(base)/live/\(cleanUser)/\(cleanPass)/\(streamIdStr).m3u8"
-                    let ts = "\(base)/\(cleanUser)/\(cleanPass)/\(streamIdStr)"
+                    let ts = "\(base)/live/\(cleanUser)/\(cleanPass)/\(streamIdStr).ts"
 
                     parsed.append(XtreamChannel(
                         id: "xc-\(streamIdStr)",
@@ -299,8 +299,18 @@ class IPTVManager: ObservableObject {
             } else if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
                 let id = "m3u-\(parsed.count + 1)"
                 let streamUrl = trimmed
-                let hls = streamUrl.contains(".m3u8") ? streamUrl : streamUrl.replacingOccurrences(of: ".ts", with: ".m3u8")
-                let ts = streamUrl.contains(".m3u8") ? streamUrl.replacingOccurrences(of: ".m3u8", with: "") : streamUrl
+                let hls: String
+                let ts: String
+                if streamUrl.contains(".m3u8") {
+                    hls = streamUrl
+                    ts = streamUrl.replacingOccurrences(of: ".m3u8", with: ".ts")
+                } else if streamUrl.hasSuffix(".ts") {
+                    ts = streamUrl
+                    hls = String(streamUrl.dropLast(3)) + ".m3u8"
+                } else {
+                    ts = streamUrl
+                    hls = streamUrl + ".m3u8"
+                }
 
                 let finalName = tempName.isEmpty ? "Canal \(parsed.count + 1)" : tempName
                 let finalCat = tempCat.isEmpty ? "General" : tempCat
@@ -344,22 +354,70 @@ class IPTVManager: ObservableObject {
     }
 }
 
-// MARK: - Native Player with Intelligent Buffer & Observer
+// MARK: - Native Player with Resilient Buffer & Auto-Resume
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
 
     class Coordinator: NSObject {
         var currentUrl: String = ""
-        var playerItemContext = 0
         weak var player: AVPlayer?
-        
-        // Este observador fuerza a reanudar el video automáticamente si Apple decide pausarlo por un micro-corte
-        override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
-            if keyPath == "playbackLikelyToKeepUp" {
-                if let item = object as? AVPlayerItem, item.isPlaybackLikelyToKeepUp {
-                    player?.play()
+        private var stallObserver: Any?
+        private var endObserver: Any?
+        private var statusObserver: NSKeyValueObservation?
+        private var keepUpObserver: NSKeyValueObservation?
+
+        func setupItem(_ item: AVPlayerItem, for player: AVPlayer) {
+            cleanItemObservers()
+
+            // 1. Observer para cuando se atasca por microcorte de red (Stalled)
+            stallObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemPlaybackStalled,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                // Reanuda la reproducción en cuanto el buffer se recupera
+                self?.player?.play()
+            }
+
+            // 2. En streams en vivo, si el reproductor alcanza el borde de la lista de reproducción
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                item.seek(to: .positiveInfinity) { _ in
+                    self?.player?.play()
                 }
             }
+
+            // 3. Observar cuando el buffer vuelve a ser suficiente
+            keepUpObserver = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
+                if item.isPlaybackLikelyToKeepUp {
+                    self?.player?.play()
+                }
+            }
+
+            // 4. Observar cuando el item esté listo
+            statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+                if item.status == .readyToPlay {
+                    self?.player?.play()
+                }
+            }
+        }
+
+        func cleanItemObservers() {
+            if let obs = stallObserver { NotificationCenter.default.removeObserver(obs) }
+            if let obs = endObserver { NotificationCenter.default.removeObserver(obs) }
+            stallObserver = nil
+            endObserver = nil
+            statusObserver?.invalidate()
+            statusObserver = nil
+            keepUpObserver?.invalidate()
+            keepUpObserver = nil
+        }
+
+        deinit {
+            cleanItemObservers()
         }
     }
 
@@ -381,33 +439,33 @@ struct NativePlayerView: UIViewControllerRepresentable {
             
             guard let url = URL(string: streamUrl) else { return }
             
-            // 1. Forzar el User-Agent para que el servidor Xtream no rechace la conexión inicial
+            // 1. Forzar el User-Agent para que el servidor Xtream acepte el stream
             let headers = ["User-Agent": "IPTVSmartersPro/3.1.5"]
             let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-            
             let item = AVPlayerItem(asset: asset)
             
-            // 2. Configuración agresiva para streaming en vivo (Evita el corte de 20s)
-            item.preferredForwardBufferDuration = 2.0 // Mantiene un buffer corto y constante
+            // 2. Buffer automático:
+            // preferredForwardBufferDuration = 0 permite que iOS mantenga el buffer óptimo continuo (10-20s),
+            // evitando el congelamiento a los 25-30s que causaba el valor de 2.0s.
+            item.preferredForwardBufferDuration = 0
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             
-            // Adjuntar el observador antibloqueo
-            item.addObserver(context.coordinator, forKeyPath: "playbackLikelyToKeepUp", options: .new, context: &context.coordinator.playerItemContext)
-            
             let player = AVPlayer(playerItem: item)
-            
-            // 3. Desactivar la pausa automática de Apple
-            player.automaticallyWaitsToMinimizeStalling = false
+            // Permitir que Apple espere buffer suficiente para evitar congelamientos
+            player.automaticallyWaitsToMinimizeStalling = true
             
             context.coordinator.player = player
+            context.coordinator.setupItem(item, for: player)
+            
             uiViewController.player = player
             player.play()
         }
     }
     
-    // Limpieza de memoria para evitar crasheos al cambiar de canal
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
-        uiViewController.player?.currentItem?.removeObserver(coordinator, forKeyPath: "playbackLikelyToKeepUp")
+        coordinator.cleanItemObservers()
+        uiViewController.player?.pause()
+        uiViewController.player = nil
     }
 }
 
