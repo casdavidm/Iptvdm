@@ -156,7 +156,7 @@ class IPTVManager: ObservableObject {
                     catsSet.insert(cat)
 
                     let hls = "\(base)/live/\(cleanUser)/\(cleanPass)/\(streamIdStr).m3u8"
-                    let ts = "\(base)/live/\(cleanUser)/\(cleanPass)/\(streamIdStr).ts"
+                    let ts = "\(base)/\(cleanUser)/\(cleanPass)/\(streamIdStr)"
 
                     parsed.append(XtreamChannel(
                         id: "xc-\(streamIdStr)",
@@ -354,7 +354,7 @@ class IPTVManager: ObservableObject {
     }
 }
 
-// MARK: - Native Player with Resilient Buffer & Auto-Resume
+// MARK: - Native Player with Resilient Buffer, Global User-Agent & Watchdog
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
 
@@ -365,6 +365,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var endObserver: Any?
         private var statusObserver: NSKeyValueObservation?
         private var keepUpObserver: NSKeyValueObservation?
+        private var timeControlObserver: NSKeyValueObservation?
+        private var timeObserver: Any?
+        private var lastTimeSeconds: Double = -1.0
+        private var stallCounter: Int = 0
 
         func setupItem(_ item: AVPlayerItem, for player: AVPlayer) {
             cleanItemObservers()
@@ -374,33 +378,58 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 forName: .AVPlayerItemPlaybackStalled,
                 object: item,
                 queue: .main
-            ) { [weak self] _ in
-                // Reanuda la reproducción en cuanto el buffer se recupera
-                self?.player?.play()
+            ) { [weak self, weak player] _ in
+                player?.currentItem?.seek(to: .positiveInfinity, completionHandler: { _ in
+                    player?.play()
+                })
             }
 
-            // 2. En streams en vivo, si el reproductor alcanza el borde de la lista de reproducción
+            // 2. En streams en vivo, si el reproductor alcanza el fin del buffer de fragmentos
             endObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
                 queue: .main
-            ) { [weak self] _ in
-                item.seek(to: .positiveInfinity) { _ in
-                    self?.player?.play()
-                }
+            ) { [weak player] _ in
+                player?.currentItem?.seek(to: .positiveInfinity, completionHandler: { _ in
+                    player?.play()
+                })
             }
 
             // 3. Observar cuando el buffer vuelve a ser suficiente
-            keepUpObserver = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
+            keepUpObserver = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak player] item, _ in
                 if item.isPlaybackLikelyToKeepUp {
-                    self?.player?.play()
+                    player?.play()
                 }
             }
 
             // 4. Observar cuando el item esté listo
-            statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            statusObserver = item.observe(\.status, options: [.new]) { [weak player] item, _ in
                 if item.status == .readyToPlay {
-                    self?.player?.play()
+                    player?.play()
+                }
+            }
+
+            // 5. Watchdog de tiempo real: detecta si la imagen se congela a los 27s
+            timeObserver = player.addPeriodicTimeObserver(
+                forInterval: CMTime(seconds: 1, preferredTimescale: 2),
+                queue: .main
+            ) { [weak self, weak player] time in
+                guard let self = self, let player = player else { return }
+                let currentSec = time.seconds
+
+                // Si el tiempo no avanza pero el player debería estar reproduciendo
+                if currentSec > 0 && abs(currentSec - self.lastTimeSeconds) < 0.1 {
+                    self.stallCounter += 1
+                    // Si lleva más de 2 segundos congelado en la misma posición:
+                    if self.stallCounter >= 2 {
+                        self.stallCounter = 0
+                        player.currentItem?.seek(to: .positiveInfinity, completionHandler: { _ in
+                            player.play()
+                        })
+                    }
+                } else {
+                    self.stallCounter = 0
+                    self.lastTimeSeconds = currentSec
                 }
             }
         }
@@ -408,12 +437,20 @@ struct NativePlayerView: UIViewControllerRepresentable {
         func cleanItemObservers() {
             if let obs = stallObserver { NotificationCenter.default.removeObserver(obs) }
             if let obs = endObserver { NotificationCenter.default.removeObserver(obs) }
+            if let tObs = timeObserver, let p = player {
+                p.removeTimeObserver(tObs)
+            }
             stallObserver = nil
             endObserver = nil
+            timeObserver = nil
             statusObserver?.invalidate()
             statusObserver = nil
             keepUpObserver?.invalidate()
             keepUpObserver = nil
+            timeControlObserver?.invalidate()
+            timeControlObserver = nil
+            lastTimeSeconds = -1.0
+            stallCounter = 0
         }
 
         deinit {
@@ -437,21 +474,30 @@ struct NativePlayerView: UIViewControllerRepresentable {
         if context.coordinator.currentUrl != streamUrl {
             context.coordinator.currentUrl = streamUrl
             
+            // 1. IMPORTANTE: Detener completamente el stream anterior para que el servidor
+            // Xtream no detecte conexiones concurrentes duplicadas y corte la línea a los 27s
+            context.coordinator.player?.pause()
+            context.coordinator.player?.replaceCurrentItem(with: nil)
+            context.coordinator.cleanItemObservers()
+            
             guard let url = URL(string: streamUrl) else { return }
             
-            // 1. Forzar el User-Agent para que el servidor Xtream acepte el stream
-            let headers = ["User-Agent": "IPTVSmartersPro/3.1.5"]
-            let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+            // 2. User-Agent a nivel GLOBAL de la sesión y de los fragmentos HLS:
+            // - AVURLAssetHTTPHeaderFieldsKey: usado en la petición inicial
+            // - AVURLAssetHTTPUserAgentKey: propaga el User-Agent a CADA segmento .ts y recarga de playlist
+            let userAgent = "IPTVSmartersPro/3.1.5"
+            let options: [String: Any] = [
+                "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": userAgent],
+                "AVURLAssetHTTPUserAgentKey": userAgent
+            ]
+            let asset = AVURLAsset(url: url, options: options)
             let item = AVPlayerItem(asset: asset)
             
-            // 2. Buffer automático:
-            // preferredForwardBufferDuration = 0 permite que iOS mantenga el buffer óptimo continuo (10-20s),
-            // evitando el congelamiento a los 25-30s que causaba el valor de 2.0s.
+            // 3. Buffer dinámico continuo sin tope artificial
             item.preferredForwardBufferDuration = 0
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             
             let player = AVPlayer(playerItem: item)
-            // Permitir que Apple espere buffer suficiente para evitar congelamientos
             player.automaticallyWaitsToMinimizeStalling = true
             
             context.coordinator.player = player
@@ -465,6 +511,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.cleanItemObservers()
         uiViewController.player?.pause()
+        uiViewController.player?.replaceCurrentItem(with: nil)
         uiViewController.player = nil
     }
 }
