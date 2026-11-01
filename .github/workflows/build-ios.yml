@@ -124,30 +124,32 @@ jobs:
         run: |
           xcodegen generate
 
-      - name: Build Application Archive
+      - name: Compile Native Application with xcodebuild
         run: |
-          xcodebuild archive \
+          xcodebuild build \
             -project StreamOS.xcodeproj \
             -scheme StreamOS \
             -configuration Release \
             -destination "generic/platform=iOS" \
-            -archivePath build/StreamOS.xcarchive \
+            CONFIGURATION_BUILD_DIR=build/Release-iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO
 
       - name: Verify ATS and Package IPA
         run: |
           mkdir -p Payload
-          cp -R build/StreamOS.xcarchive/Products/Applications/StreamOS.app Payload/
+          cp -R build/Release-iphoneos/StreamOS.app Payload/
           cp StreamOSNative/Info.plist Payload/StreamOS.app/Info.plist
           plutil -convert binary1 Payload/StreamOS.app/Info.plist
+          plutil -p Payload/StreamOS.app/Info.plist | grep -A 5 NSAppTransportSecurity || true
           zip -qr StreamOS.ipa Payload
+          ls -lh StreamOS.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: StreamOS-IPA
           path: StreamOS.ipa
-          
