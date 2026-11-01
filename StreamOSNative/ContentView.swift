@@ -255,12 +255,23 @@ class IPTVManager: ObservableObject {
     }
 }
 
-// MARK: - Native Player Cache Bypass
+// MARK: - Native Player with Intelligent Buffer & Observer
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
 
-    class Coordinator {
+    class Coordinator: NSObject {
         var currentUrl: String = ""
+        var playerItemContext = 0
+        weak var player: AVPlayer?
+        
+        // Este observador fuerza a reanudar el video automáticamente si Apple decide pausarlo por un micro-corte
+        override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+            if keyPath == "playbackLikelyToKeepUp" {
+                if let item = object as? AVPlayerItem, item.isPlaybackLikelyToKeepUp {
+                    player?.play()
+                }
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -279,19 +290,35 @@ struct NativePlayerView: UIViewControllerRepresentable {
         if context.coordinator.currentUrl != streamUrl {
             context.coordinator.currentUrl = streamUrl
             
-            // Truco: Agregar un timestamp engaña a iOS para que no cargue el video roto de la caché
-            let separator = streamUrl.contains("?") ? "&" : "?"
-            let cacheBusterUrl = "\(streamUrl)\(separator)t=\(Int(Date().timeIntervalSince1970))"
+            guard let url = URL(string: streamUrl) else { return }
             
-            if let liveUrl = URL(string: cacheBusterUrl) {
-                let player = AVPlayer(url: liveUrl)
-                // Evita pausas automáticas agresivas
-                player.automaticallyWaitsToMinimizeStalling = false
-                
-                uiViewController.player = player
-                player.play()
-            }
+            // 1. Forzar el User-Agent para que el servidor Xtream no rechace la conexión inicial
+            let headers = ["User-Agent": "IPTVSmartersPro/3.1.5"]
+            let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+            
+            let item = AVPlayerItem(asset: asset)
+            
+            // 2. Configuración agresiva para streaming en vivo (Evita el corte de 20s)
+            item.preferredForwardBufferDuration = 2.0 // Mantiene un buffer corto y constante
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            
+            // Adjuntar el observador antibloqueo
+            item.addObserver(context.coordinator, forKeyPath: "playbackLikelyToKeepUp", options: .new, context: &context.coordinator.playerItemContext)
+            
+            let player = AVPlayer(playerItem: item)
+            
+            // 3. Desactivar la pausa automática de Apple
+            player.automaticallyWaitsToMinimizeStalling = false
+            
+            context.coordinator.player = player
+            uiViewController.player = player
+            player.play()
         }
+    }
+    
+    // Limpieza de memoria para evitar crasheos al cambiar de canal
+    static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
+        uiViewController.player?.currentItem?.removeObserver(coordinator, forKeyPath: "playbackLikelyToKeepUp")
     }
 }
 
