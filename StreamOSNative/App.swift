@@ -8,7 +8,7 @@ struct StreamOSApp: App {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            print("Audio error: \(error)")
+            print("Audio error: \(error.localizedDescription)")
         }
     }
 
@@ -19,4 +19,3 @@ struct StreamOSApp: App {
         }
     }
 }
-
