@@ -4,7 +4,7 @@ import Combine
 
 struct XtreamChannel: Identifiable, Equatable {
     let id: String
-    let streamId: Int
+    let streamId: String
     let name: String
     let category: String
     let hlsUrl: String
@@ -27,6 +27,7 @@ class IPTVManager: ObservableObject {
     @Published var selectedChannel: XtreamChannel?
     @Published var isLoading: Bool = false
     @Published var errorMessage: String? = nil
+    @Published var statusMessage: String = "Listo"
     @Published var searchText: String = "" {
         didSet { filterChannels() }
     }
@@ -42,8 +43,8 @@ class IPTVManager: ObservableObject {
     private lazy var customSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
-        config.timeoutIntervalForRequest = 25.0
-        config.timeoutIntervalForResource = 30.0
+        config.timeoutIntervalForRequest = 45.0
+        config.timeoutIntervalForResource = 60.0
         return URLSession(configuration: config, delegate: InsecureSessionDelegate(), delegateQueue: nil)
     }()
 
@@ -57,84 +58,189 @@ class IPTVManager: ObservableObject {
     }
 
     func fetchChannels() {
-        guard !serverUrl.isEmpty, !username.isEmpty, !password.isEmpty else {
-            self.errorMessage = "Configura servidor, usuario y contraseña en Ajustes."
-            return
-        }
-
+        let cleanPass = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let base = cleanServerUrl(serverUrl)
-        guard let endpoint = URL(string: "\(base)/player_api.php?username=\(username)&password=\(password)&action=get_live_streams") else {
-            self.errorMessage = "URL de servidor inválida."
+
+        guard !cleanPass.isEmpty else {
+            self.errorMessage = "La contraseña está vacía. Abre Ajustes e ingrésala."
             return
         }
 
         self.isLoading = true
         self.errorMessage = nil
+        self.statusMessage = "Conectando al servidor..."
 
-        var request = URLRequest(url: endpoint)
+        let apiEndpointStr = "\(base)/player_api.php?username=\(cleanUser)&password=\(cleanPass)&action=get_live_streams"
+        guard let apiEndpoint = URL(string: apiEndpointStr) else {
+            self.errorMessage = "URL de servidor inválida."
+            self.isLoading = false
+            return
+        }
+
+        var request = URLRequest(url: apiEndpoint)
         request.httpMethod = "GET"
-        request.timeoutInterval = 30.0
+        request.timeoutInterval = 45.0
         request.setValue("IPTVSmartersPro/3.1.5", forHTTPHeaderField: "User-Agent")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
 
         customSession.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+
+            if let err = error {
+                DispatchQueue.main.async {
+                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: err.localizedDescription)
+                }
+                return
+            }
+
+            guard let rawData = data, !rawData.isEmpty else {
+                DispatchQueue.main.async {
+                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "Respuesta vacía")
+                }
+                return
+            }
+
+            if let rawArray = try? JSONSerialization.jsonObject(with: rawData) as? [[String: Any]], !rawArray.isEmpty {
+                var parsed: [XtreamChannel] = []
+                var catsSet = Set<String>()
+
+                for item in rawArray {
+                    let sName = (item["name"] as? String) ?? "Canal"
+                    var streamIdStr = ""
+                    if let intId = item["stream_id"] as? Int {
+                        streamIdStr = "\(intId)"
+                    } else if let strId = item["stream_id"] as? String {
+                        streamIdStr = strId
+                    } else {
+                        continue
+                    }
+
+                    var cat = "General"
+                    if let nameMatch = sName.range(of: "^[A-Za-z0-9\\s]{2,10}[|:\\-]", options: .regularExpression) {
+                        cat = String(sName[nameMatch].dropLast()).trimmingCharacters(in: .whitespaces)
+                    }
+                    catsSet.insert(cat)
+
+                    let hls = "\(base)/live/\(cleanUser)/\(cleanPass)/\(streamIdStr).m3u8"
+                    let ts = "\(base)/\(cleanUser)/\(cleanPass)/\(streamIdStr)"
+
+                    parsed.append(XtreamChannel(
+                        id: "xc-\(streamIdStr)",
+                        streamId: streamIdStr,
+                        name: sName,
+                        category: cat,
+                        hlsUrl: hls,
+                        tsUrl: ts
+                    ))
+                }
+
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    if !parsed.isEmpty {
+                        self.channels = parsed
+                        self.categories = ["Todas"] + Array(catsSet).sorted()
+                        self.filterChannels()
+                        self.selectedChannel = parsed.first
+                        self.statusMessage = "\(parsed.count) canales cargados"
+                    } else {
+                        self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "Credenciales erróneas o cuenta vencida")
+                    }
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "El servidor no respondió en formato JSON")
+                }
+            }
+        }.resume()
+    }
+
+    func fetchM3uFallback(base: String, user: String, pass: String, previousErr: String) {
+        self.statusMessage = "Descargando lista de canales..."
+
+        let m3uUrlStr = "\(base)/get.php?username=\(user)&password=\(pass)&type=m3u_plus&output=ts"
+        guard let m3uUrl = URL(string: m3uUrlStr) else {
+            self.isLoading = false
+            self.errorMessage = previousErr
+            return
+        }
+
+        var m3uReq = URLRequest(url: m3uUrl)
+        m3uReq.timeoutInterval = 45.0
+        m3uReq.setValue("IPTVSmartersPro/3.1.5", forHTTPHeaderField: "User-Agent")
+
+        customSession.dataTask(with: m3uReq) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isLoading = false
 
                 if let err = error {
-                    self.errorMessage = "Error de red: \(err.localizedDescription)"
+                    self.errorMessage = "Error del servidor: \(err.localizedDescription)"
                     return
                 }
 
-                guard let rawData = data else {
-                    self.errorMessage = "El servidor no devolvió datos."
+                guard let rawData = data, let text = String(data: rawData, encoding: .utf8) ?? String(data: rawData, encoding: .isoLatin1) else {
+                    self.errorMessage = "El servidor no envió datos válidos."
                     return
                 }
 
-                do {
-                    if let rawArray = try JSONSerialization.jsonObject(with: rawData) as? [[String: Any]] {
-                        var parsed: [XtreamChannel] = []
-                        var catsSet = Set<String>()
-
-                        for item in rawArray {
-                            guard let sId = item["stream_id"] as? Int,
-                                  let sName = item["name"] as? String else { continue }
-
-                            var cat = "General"
-                            if let nameMatch = sName.range(of: "^[A-Za-z0-9\\s]{2,10}[|:\\-]", options: .regularExpression) {
-                                cat = String(sName[nameMatch].dropLast()).trimmingCharacters(in: .whitespaces)
-                            }
-                            catsSet.insert(cat)
-
-                            let hls = "\(base)/live/\(self.username)/\(self.password)/\(sId).m3u8"
-                            let ts = "\(base)/\(self.username)/\(self.password)/\(sId)"
-
-                            parsed.append(XtreamChannel(
-                                id: "xc-\(sId)",
-                                streamId: sId,
-                                name: sName,
-                                category: cat,
-                                hlsUrl: hls,
-                                tsUrl: ts
-                            ))
-                        }
-
-                        self.channels = parsed
-                        self.categories = ["Todas"] + Array(catsSet).sorted()
-                        self.filterChannels()
-
-                        if let first = self.filteredChannels.first {
-                            self.selectedChannel = first
-                        }
-                    } else {
-                        self.errorMessage = "Credenciales incorrectas o cuenta vencida."
-                    }
-                } catch {
-                    self.errorMessage = "Error al procesar canales: \(error.localizedDescription)"
+                if text.contains("#EXTM3U") || text.contains("http") {
+                    self.parseM3UContent(text, base: base, user: user, pass: pass)
+                } else {
+                    self.errorMessage = "Credenciales incorrectas o cuenta inactiva."
                 }
             }
         }.resume()
+    }
+
+    func parseM3UContent(_ content: String, base: String, user: String, pass: String) {
+        var parsed: [XtreamChannel] = []
+        var catsSet = Set<String>()
+        var tempName = ""
+        var tempCat = "General"
+
+        let lines = content.components(separatedBy: .newlines)
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("#EXTINF:") {
+                if let groupRange = trimmed.range(of: "group-title=\"([^\"]+)\"", options: .regularExpression) {
+                    let fullMatch = String(trimmed[groupRange])
+                    tempCat = fullMatch.replacingOccurrences(of: "group-title=\"", with: "").replacingOccurrences(of: "\"", with: "")
+                }
+                if let commaIdx = trimmed.lastIndex(of: ",") {
+                    tempName = String(trimmed[trimmed.index(after: commaIdx)...]).trimmingCharacters(in: .whitespaces)
+                }
+            } else if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+                let id = "m3u-\(parsed.count + 1)"
+                let streamUrl = trimmed
+                let hls = streamUrl.contains(".m3u8") ? streamUrl : streamUrl.replacingOccurrences(of: ".ts", with: ".m3u8")
+                let ts = streamUrl.contains(".m3u8") ? streamUrl.replacingOccurrences(of: ".m3u8", with: "") : streamUrl
+
+                parsed.append(XtreamChannel(
+                    id: id,
+                    streamId: "\(parsed.count + 1)",
+                    name: tempName.isEmpty ? "Canal \(parsed.count + 1)" : tempName,
+                    category: tempCat,
+                    hlsUrl: hls,
+                    tsUrl: ts
+                ))
+                catsSet.insert(tempCat)
+                tempName = ""
+                tempCat = "General"
+
+                if parsed.count >= 2500 { break }
+            }
+        }
+
+        if !parsed.isEmpty {
+            self.channels = parsed
+            self.categories = ["Todas"] + Array(catsSet).sorted()
+            self.filterChannels()
+            self.selectedChannel = parsed.first
+            self.statusMessage = "\(parsed.count) canales cargados"
+        } else {
+            self.errorMessage = "La lista recibida no contenía canales válidos."
+        }
     }
 
     func filterChannels() {
@@ -202,16 +308,20 @@ struct ContentView: View {
                             .fill(Color.black)
                             .aspectRatio(16/9, contentMode: .fit)
                             .overlay(
-                                Text(iptv.isLoading ? "Cargando lista..." : "Selecciona un canal")
-                                    .font(.subheadline)
-                                    .foregroundColor(.gray)
+                                VStack(spacing: 6) {
+                                    if iptv.isLoading {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        Text(iptv.statusMessage)
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    } else {
+                                        Text("Selecciona un canal")
+                                            .font(.subheadline)
+                                            .foregroundColor(.gray)
+                                    }
+                                }
                             )
-                    }
-
-                    if iptv.isLoading {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.3)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -336,7 +446,7 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            if iptv.channels.isEmpty {
+            if iptv.channels.isEmpty && !iptv.password.isEmpty {
                 iptv.fetchChannels()
             }
         }
