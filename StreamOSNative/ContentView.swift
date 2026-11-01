@@ -2,7 +2,6 @@ import SwiftUI
 import AVKit
 import Combine
 
-// MARK: - Data Models
 struct XtreamChannel: Identifiable, Equatable {
     let id: String
     let streamId: Int
@@ -12,7 +11,6 @@ struct XtreamChannel: Identifiable, Equatable {
     let tsUrl: String
 }
 
-// MARK: - Insecure Network Session Delegate
 class InsecureSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         if let trust = challenge.protectionSpace.serverTrust {
@@ -23,7 +21,6 @@ class InsecureSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskDeleg
     }
 }
 
-// MARK: - Native IPTV Manager
 class IPTVManager: ObservableObject {
     @Published var channels: [XtreamChannel] = []
     @Published var filteredChannels: [XtreamChannel] = []
@@ -152,7 +149,6 @@ class IPTVManager: ObservableObject {
     }
 }
 
-// MARK: - Native Video Player View (AVPlayer)
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
 
@@ -188,7 +184,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - Main Interface
 struct ContentView: View {
     @StateObject private var iptv = IPTVManager()
     @State private var showSettings = false
@@ -348,7 +343,6 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Settings Screen
 struct SettingsView: View {
     @ObservedObject var iptv: IPTVManager
     @Environment(\.presentationMode) var presentationMode
@@ -388,160 +382,3 @@ struct SettingsView: View {
         }
     }
 }
-```eof
-
-I will now update `.github/workflows/build-ios.yml` to specify domain-specific ATS rules for `veotv.info` so iOS cannot ignore them.
-
-```yaml:.github/workflows/build-ios.yml
-name: Build Native Swift IPA
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: macos-15
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install XcodeGen
-        run: |
-          brew install xcodegen
-
-      - name: Clean Environment
-        run: |
-          rm -rf Frameworks Podfile Podfile.lock Pods Payload *.ipa build
-
-      - name: Create Info.plist with Domain Specific ATS
-        run: |
-          mkdir -p StreamOSNative
-          cat << 'EOF' > StreamOSNative/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleDevelopmentRegion</key>
-            <string>en</string>
-            <key>CFBundleDisplayName</key>
-            <string>StreamOS</string>
-            <key>CFBundleExecutable</key>
-            <string>StreamOS</string>
-            <key>CFBundleIdentifier</key>
-            <string>com.casdavidm.streamos</string>
-            <key>CFBundleInfoDictionaryVersion</key>
-            <string>6.0</string>
-            <key>CFBundleName</key>
-            <string>StreamOS</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-            <key>CFBundleShortVersionString</key>
-            <string>1.0</string>
-            <key>CFBundleVersion</key>
-            <string>1</string>
-            <key>LSRequiresIPhoneOS</key>
-            <true/>
-            <key>UILaunchScreen</key>
-            <dict/>
-            <key>UIRequiredDeviceCapabilities</key>
-            <array>
-              <string>arm64</string>
-            </array>
-            <key>UIBackgroundModes</key>
-            <array>
-              <string>audio</string>
-            </array>
-            <key>NSAppTransportSecurity</key>
-            <dict>
-              <key>NSAllowsArbitraryLoads</key>
-              <true/>
-              <key>NSAllowsArbitraryLoadsInMedia</key>
-              <true/>
-              <key>NSAllowsLocalNetworking</key>
-              <true/>
-              <key>NSExceptionDomains</key>
-              <dict>
-                <key>veotv.info</key>
-                <dict>
-                  <key>NSIncludesSubdomains</key>
-                  <true/>
-                  <key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
-                  <true/>
-                  <key>NSTemporaryExceptionMinimumTLSVersion</key>
-                  <string>TLSv1.0</string>
-                  <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                  <true/>
-                  <key>NSExceptionRequiresForwardSecrecy</key>
-                  <false/>
-                </dict>
-              </dict>
-            </dict>
-          </dict>
-          </plist>
-          EOF
-
-      - name: Create Project Definition
-        run: |
-          cat << 'EOF' > project.yml
-          name: StreamOS
-          options:
-            bundleIdPrefix: com.casdavidm
-            deploymentTarget:
-              iOS: "15.0"
-          targets:
-            StreamOS:
-              type: application
-              platform: iOS
-              deploymentTarget: "15.0"
-              sources:
-                - path: StreamOSNative
-                  excludes:
-                    - "Info.plist"
-              settings:
-                base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.casdavidm.streamos
-                  INFOPLIST_FILE: StreamOSNative/Info.plist
-                  GENERATE_INFOPLIST_FILE: NO
-                  CODE_SIGNING_ALLOWED: NO
-                  CODE_SIGNING_REQUIRED: NO
-                  CODE_SIGN_IDENTITY: ""
-                  DEVELOPMENT_TEAM: ""
-                  CURRENT_PROJECT_VERSION: 1
-                  MARKETING_VERSION: "1.0"
-                  SWIFT_VERSION: "5.0"
-                  ENABLE_BITCODE: NO
-          EOF
-
-      - name: Generate Xcode Project
-        run: |
-          xcodegen generate
-
-      - name: Build Application Archive
-        run: |
-          xcodebuild archive \
-            -project StreamOS.xcodeproj \
-            -scheme StreamOS \
-            -configuration Release \
-            -destination "generic/platform=iOS" \
-            -archivePath build/StreamOS.xcarchive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
-
-      - name: Verify ATS and Package IPA
-        run: |
-          mkdir -p Payload
-          cp -R build/StreamOS.xcarchive/Products/Applications/StreamOS.app Payload/
-          cp StreamOSNative/Info.plist Payload/StreamOS.app/Info.plist
-          plutil -convert binary1 Payload/StreamOS.app/Info.plist
-          zip -qr StreamOS.ipa Payload
-
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: StreamOS-IPA
-          path: StreamOS.ipa
