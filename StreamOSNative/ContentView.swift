@@ -255,7 +255,7 @@ class IPTVManager: ObservableObject {
     }
 }
 
-// MARK: - Native Player with Coordinator and Camouflage
+// MARK: - Native Player Cache Bypass
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
 
@@ -278,19 +278,14 @@ struct NativePlayerView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
         if context.coordinator.currentUrl != streamUrl {
             context.coordinator.currentUrl = streamUrl
-            if let url = URL(string: streamUrl) {
-                
-                let headers: [String: String] = [
-                    "User-Agent": "IPTVSmartersPro/3.1.5"
-                ]
-                let options: [String: Any] = [
-                    "AVURLAssetHTTPHeaderFieldsKey": headers
-                ]
-                
-                let asset = AVURLAsset(url: url, options: options)
-                let item = AVPlayerItem(asset: asset)
-                let player = AVPlayer(playerItem: item)
-                
+            
+            // Truco: Agregar un timestamp engaña a iOS para que no cargue el video roto de la caché
+            let separator = streamUrl.contains("?") ? "&" : "?"
+            let cacheBusterUrl = "\(streamUrl)\(separator)t=\(Int(Date().timeIntervalSince1970))"
+            
+            if let liveUrl = URL(string: cacheBusterUrl) {
+                let player = AVPlayer(url: liveUrl)
+                // Evita pausas automáticas agresivas
                 player.automaticallyWaitsToMinimizeStalling = false
                 
                 uiViewController.player = player
