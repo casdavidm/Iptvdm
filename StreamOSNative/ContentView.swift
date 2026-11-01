@@ -255,7 +255,7 @@ class IPTVManager: ObservableObject {
     }
 }
 
-// MARK: - Native Player with Coordinator (Solves the 20s Stop Issue)
+// MARK: - Native Player with Coordinator and Camouflage
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
 
@@ -276,11 +276,23 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        // Solo recrea el reproductor si la URL realmente cambió por petición del usuario
         if context.coordinator.currentUrl != streamUrl {
             context.coordinator.currentUrl = streamUrl
             if let url = URL(string: streamUrl) {
-                let player = AVPlayer(url: url)
+                
+                let headers: [String: String] = [
+                    "User-Agent": "IPTVSmartersPro/3.1.5"
+                ]
+                let options: [String: Any] = [
+                    "AVURLAssetHTTPHeaderFieldsKey": headers
+                ]
+                
+                let asset = AVURLAsset(url: url, options: options)
+                let item = AVPlayerItem(asset: asset)
+                let player = AVPlayer(playerItem: item)
+                
+                player.automaticallyWaitsToMinimizeStalling = false
+                
                 uiViewController.player = player
                 player.play()
             }
@@ -298,7 +310,6 @@ struct ContentView: View {
         NavigationView {
             VStack(spacing: 0) {
                 
-                // Zona del reproductor (Soluciona el problema de tamaño)
                 ZStack {
                     if let selected = iptv.selectedChannel {
                         NativePlayerView(streamUrl: useTsFormat ? selected.tsUrl : selected.hlsUrl)
@@ -323,7 +334,7 @@ struct ContentView: View {
                             )
                     }
                 }
-                .frame(height: UIScreen.main.bounds.width * 9 / 16) // Mantiene la proporción perfecta 16:9 basado en el ancho
+                .frame(height: UIScreen.main.bounds.width * 9 / 16)
                 .frame(maxWidth: .infinity)
                 .background(Color.black)
 
