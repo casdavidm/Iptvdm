@@ -36,9 +36,15 @@ class IPTVManager: ObservableObject {
     }
     @Published var categories: [String] = ["Todas"]
 
-    @AppStorage("xc_server") var serverUrl: String = "http://veotv.info:8880"
-    @AppStorage("xc_user") var username: String = "DavidMunoz1"
-    @AppStorage("xc_pass") var password: String = ""
+    @Published var serverUrl: String = UserDefaults.standard.string(forKey: "xc_server") ?? "http://veotv.info:8880" {
+        didSet { UserDefaults.standard.set(serverUrl, forKey: "xc_server") }
+    }
+    @Published var username: String = UserDefaults.standard.string(forKey: "xc_user") ?? "DavidMunoz1" {
+        didSet { UserDefaults.standard.set(username, forKey: "xc_user") }
+    }
+    @Published var password: String = UserDefaults.standard.string(forKey: "xc_pass") ?? "" {
+        didSet { UserDefaults.standard.set(password, forKey: "xc_pass") }
+    }
 
     private lazy var customSession: URLSession = {
         let config = URLSessionConfiguration.default
@@ -57,6 +63,16 @@ class IPTVManager: ObservableObject {
         return cleaned
     }
 
+    func buildUrl(base: String, endpoint: String, queryItems: [URLQueryItem]) -> URL? {
+        let baseClean = cleanServerUrl(base)
+        guard var components = URLComponents(string: baseClean) else { return nil }
+        let currentPath = components.path.hasSuffix("/") ? String(components.path.dropLast()) : components.path
+        let cleanEndpoint = endpoint.hasPrefix("/") ? endpoint : "/" + endpoint
+        components.path = currentPath + cleanEndpoint
+        components.queryItems = queryItems
+        return components.url
+    }
+
     func fetchChannels() {
         let cleanPass = password.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,8 +87,13 @@ class IPTVManager: ObservableObject {
         self.errorMessage = nil
         self.statusMessage = "Conectando al servidor..."
 
-        let apiEndpointStr = "\(base)/player_api.php?username=\(cleanUser)&password=\(cleanPass)&action=get_live_streams"
-        guard let apiEndpoint = URL(string: apiEndpointStr) else {
+        let queryItems = [
+            URLQueryItem(name: "username", value: cleanUser),
+            URLQueryItem(name: "password", value: cleanPass),
+            URLQueryItem(name: "action", value: "get_live_streams")
+        ]
+
+        guard let apiEndpoint = buildUrl(base: base, endpoint: "player_api.php", queryItems: queryItems) else {
             self.errorMessage = "URL de servidor inválida."
             self.isLoading = false
             return
@@ -87,20 +108,32 @@ class IPTVManager: ObservableObject {
         customSession.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
 
+            let httpResponse = response as? HTTPURLResponse
+            let statusCode = httpResponse?.statusCode ?? 0
+
             if let err = error {
                 DispatchQueue.main.async {
-                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: err.localizedDescription)
+                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "Error de red: \(err.localizedDescription)")
                 }
                 return
             }
 
             guard let rawData = data, !rawData.isEmpty else {
                 DispatchQueue.main.async {
-                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "Respuesta vacía")
+                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "Respuesta vacía del servidor (Código \(statusCode))")
                 }
                 return
             }
 
+            // Si el servidor devolvió un error HTTP (ej: 401, 403, 404, 500)
+            if statusCode != 200 && statusCode != 0 {
+                DispatchQueue.main.async {
+                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "Servidor respondió con código \(statusCode)")
+                }
+                return
+            }
+
+            // Caso 1: Array JSON con canales de Xtream
             if let rawArray = try? JSONSerialization.jsonObject(with: rawData) as? [[String: Any]], !rawArray.isEmpty {
                 var parsed: [XtreamChannel] = []
                 var catsSet = Set<String>()
@@ -144,22 +177,53 @@ class IPTVManager: ObservableObject {
                         self.selectedChannel = parsed.first
                         self.statusMessage = "\(parsed.count) canales cargados"
                     } else {
-                        self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "Credenciales erróneas o cuenta vencida")
+                        self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "La lista de canales en el servidor está vacía")
                     }
                 }
-            } else {
-                DispatchQueue.main.async {
-                    self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "El servidor no respondió en formato JSON")
+                return
+            }
+
+            // Caso 2: Objeto JSON devuelto por Xtream con información de error o autenticación
+            if let dict = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
+                if let userInfo = dict["user_info"] as? [String: Any] {
+                    let auth = userInfo["auth"] as? Int ?? 1
+                    let status = (userInfo["status"] as? String) ?? ""
+                    if auth == 0 || status.lowercased() == "disabled" || status.lowercased() == "expired" {
+                        DispatchQueue.main.async {
+                            self.isLoading = false
+                            let estado = status.isEmpty ? "No autorizado" : status
+                            self.errorMessage = "Credenciales incorrectas o cuenta vencida (Estado: \(estado)). Abre Ajustes."
+                        }
+                        return
+                    }
                 }
+                if let message = dict["message"] as? String {
+                    DispatchQueue.main.async {
+                        self.isLoading = false
+                        self.errorMessage = "Servidor: \(message). Verifica tus datos en Ajustes."
+                    }
+                    return
+                }
+            }
+
+            // Caso 3: Fallback a M3U
+            DispatchQueue.main.async {
+                self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "El API Xtream no respondió en formato JSON")
             }
         }.resume()
     }
 
     func fetchM3uFallback(base: String, user: String, pass: String, previousErr: String) {
-        self.statusMessage = "Descargando lista de canales..."
+        self.statusMessage = "Intentando lista M3U alternativa..."
 
-        let m3uUrlStr = "\(base)/get.php?username=\(user)&password=\(pass)&type=m3u_plus&output=ts"
-        guard let m3uUrl = URL(string: m3uUrlStr) else {
+        let queryItems = [
+            URLQueryItem(name: "username", value: user),
+            URLQueryItem(name: "password", value: pass),
+            URLQueryItem(name: "type", value: "m3u_plus"),
+            URLQueryItem(name: "output", value: "ts")
+        ]
+
+        guard let m3uUrl = buildUrl(base: base, endpoint: "get.php", queryItems: queryItems) else {
             self.isLoading = false
             self.errorMessage = previousErr
             return
@@ -174,20 +238,34 @@ class IPTVManager: ObservableObject {
                 guard let self = self else { return }
                 self.isLoading = false
 
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+
                 if let err = error {
-                    self.errorMessage = "Error del servidor: \(err.localizedDescription)"
+                    self.errorMessage = "Error de conexión: \(err.localizedDescription)"
+                    return
+                }
+
+                if statusCode == 404 {
+                    self.errorMessage = "Error 404: Servidor o credenciales no encontrados. Verifica Servidor, Usuario y Contraseña en Ajustes."
+                    return
+                } else if statusCode == 401 || statusCode == 403 {
+                    self.errorMessage = "Error \(statusCode): Usuario o contraseña denegados. Verifica en Ajustes."
+                    return
+                } else if statusCode >= 500 {
+                    self.errorMessage = "Error \(statusCode): El servidor IPTV tiene problemas internos."
                     return
                 }
 
                 guard let rawData = data, let text = String(data: rawData, encoding: .utf8) ?? String(data: rawData, encoding: .isoLatin1) else {
-                    self.errorMessage = "El servidor no envió datos válidos."
+                    self.errorMessage = "El servidor no envió datos legibles (Código \(statusCode))."
                     return
                 }
 
-                if text.contains("#EXTM3U") || text.contains("http") {
+                // Exigir formato M3U real (debe contener #EXTM3U o #EXTINF), NO solo 'http'
+                if text.contains("#EXTM3U") || text.contains("#EXTINF:") {
                     self.parseM3UContent(text, base: base, user: user, pass: pass)
                 } else {
-                    self.errorMessage = "Credenciales incorrectas o cuenta inactiva."
+                    self.errorMessage = "El servidor devolvió un error (Código \(statusCode)). Verifica servidor, usuario y contraseña en Ajustes."
                 }
             }
         }.resume()
@@ -202,11 +280,19 @@ class IPTVManager: ObservableObject {
         let lines = content.components(separatedBy: .newlines)
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
             if trimmed.hasPrefix("#EXTINF:") {
+                // Extraer categoría (group-title)
                 if let groupRange = trimmed.range(of: "group-title=\"([^\"]+)\"", options: .regularExpression) {
                     let fullMatch = String(trimmed[groupRange])
-                    tempCat = fullMatch.replacingOccurrences(of: "group-title=\"", with: "").replacingOccurrences(of: "\"", with: "")
+                    tempCat = fullMatch.replacingOccurrences(of: "group-title=\"", with: "").replacingOccurrences(of: "\"", with: "").trimmingCharacters(in: .whitespaces)
+                } else if let groupRange2 = trimmed.range(of: "group-title='([^']+)'", options: .regularExpression) {
+                    let fullMatch = String(trimmed[groupRange2])
+                    tempCat = fullMatch.replacingOccurrences(of: "group-title='", with: "").replacingOccurrences(of: "'", with: "").trimmingCharacters(in: .whitespaces)
                 }
+
+                // Extraer nombre del canal
                 if let commaIdx = trimmed.lastIndex(of: ",") {
                     tempName = String(trimmed[trimmed.index(after: commaIdx)...]).trimmingCharacters(in: .whitespaces)
                 }
@@ -216,15 +302,18 @@ class IPTVManager: ObservableObject {
                 let hls = streamUrl.contains(".m3u8") ? streamUrl : streamUrl.replacingOccurrences(of: ".ts", with: ".m3u8")
                 let ts = streamUrl.contains(".m3u8") ? streamUrl.replacingOccurrences(of: ".m3u8", with: "") : streamUrl
 
+                let finalName = tempName.isEmpty ? "Canal \(parsed.count + 1)" : tempName
+                let finalCat = tempCat.isEmpty ? "General" : tempCat
+
                 parsed.append(XtreamChannel(
                     id: id,
                     streamId: "\(parsed.count + 1)",
-                    name: tempName.isEmpty ? "Canal \(parsed.count + 1)" : tempName,
-                    category: tempCat,
+                    name: finalName,
+                    category: finalCat,
                     hlsUrl: hls,
                     tsUrl: ts
                 ))
-                catsSet.insert(tempCat)
+                catsSet.insert(finalCat)
                 tempName = ""
                 tempCat = "General"
 
@@ -239,7 +328,7 @@ class IPTVManager: ObservableObject {
             self.selectedChannel = parsed.first
             self.statusMessage = "\(parsed.count) canales cargados"
         } else {
-            self.errorMessage = "La lista recibida no contenía canales válidos."
+            self.errorMessage = "No se encontraron canales válidos en la lista M3U. Verifica tus datos en Ajustes."
         }
     }
 
@@ -491,18 +580,41 @@ struct ContentView: View {
 struct SettingsView: View {
     @ObservedObject var iptv: IPTVManager
     @Environment(\.presentationMode) var presentationMode
+    @State private var isPasswordVisible: Bool = false
 
     var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Servidor Xtream")) {
-                    TextField("Servidor", text: $iptv.serverUrl)
+                Section(
+                    header: Text("Servidor Xtream"),
+                    footer: Text("Asegúrate de incluir el protocolo (http://) y el puerto (:8880 u otro) si tu proveedor lo requiere.")
+                ) {
+                    TextField("Servidor (ej: http://veotv.info:8880)", text: $iptv.serverUrl)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
+                        .keyboardType(.URL)
+
                     TextField("Usuario", text: $iptv.username)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
-                    SecureField("Contraseña", text: $iptv.password)
+
+                    HStack {
+                        if isPasswordVisible {
+                            TextField("Contraseña", text: $iptv.password)
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                        } else {
+                            SecureField("Contraseña", text: $iptv.password)
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                        }
+
+                        Button(action: { isPasswordVisible.toggle() }) {
+                            Image(systemName: isPasswordVisible ? "eye.slash.fill" : "eye.fill")
+                                .foregroundColor(.gray)
+                        }
+                        .buttonStyle(BorderlessButtonStyle())
+                    }
                 }
 
                 Section {
