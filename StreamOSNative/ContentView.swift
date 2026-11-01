@@ -255,41 +255,40 @@ class IPTVManager: ObservableObject {
     }
 }
 
+// MARK: - Native Player with Coordinator (Solves the 20s Stop Issue)
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
+
+    class Coordinator {
+        var currentUrl: String = ""
+    }
+
+    func makeCoordinator() -> Coordinator {
+        return Coordinator()
+    }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.showsPlaybackControls = true
         controller.videoGravity = .resizeAspect
         controller.allowsPictureInPicturePlayback = true
-
-        if let url = URL(string: streamUrl) {
-            let player = AVPlayer(url: url)
-            controller.player = player
-            player.play()
-        }
         return controller
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        guard let currentUrl = (uiViewController.player?.currentItem?.asset as? AVURLAsset)?.url.absoluteString else {
+        // Solo recrea el reproductor si la URL realmente cambió por petición del usuario
+        if context.coordinator.currentUrl != streamUrl {
+            context.coordinator.currentUrl = streamUrl
             if let url = URL(string: streamUrl) {
                 let player = AVPlayer(url: url)
                 uiViewController.player = player
                 player.play()
             }
-            return
-        }
-
-        if currentUrl != streamUrl, let newUrl = URL(string: streamUrl) {
-            let player = AVPlayer(url: newUrl)
-            uiViewController.player = player
-            player.play()
         }
     }
 }
 
+// MARK: - Main User Interface
 struct ContentView: View {
     @StateObject private var iptv = IPTVManager()
     @State private var showSettings = false
@@ -298,15 +297,15 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                
+                // Zona del reproductor (Soluciona el problema de tamaño)
                 ZStack {
                     if let selected = iptv.selectedChannel {
                         NativePlayerView(streamUrl: useTsFormat ? selected.tsUrl : selected.hlsUrl)
-                            .aspectRatio(16/9, contentMode: .fit)
                             .background(Color.black)
                     } else {
                         Rectangle()
                             .fill(Color.black)
-                            .aspectRatio(16/9, contentMode: .fit)
                             .overlay(
                                 VStack(spacing: 6) {
                                     if iptv.isLoading {
@@ -324,7 +323,9 @@ struct ContentView: View {
                             )
                     }
                 }
+                .frame(height: UIScreen.main.bounds.width * 9 / 16) // Mantiene la proporción perfecta 16:9 basado en el ancho
                 .frame(maxWidth: .infinity)
+                .background(Color.black)
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -453,6 +454,7 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Settings Screen
 struct SettingsView: View {
     @ObservedObject var iptv: IPTVManager
     @Environment(\.presentationMode) var presentationMode
