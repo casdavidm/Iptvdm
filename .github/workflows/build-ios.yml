@@ -7,7 +7,11 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    strategy:
+      matrix:
+        runner: [macos-14, macos-15-intel]
+      fail-fast: false
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout Code
@@ -21,7 +25,7 @@ jobs:
         run: |
           mkdir -p Frameworks
           echo "Downloading MobileVLCKit official XCFramework binary..."
-          curl -L -o MobileVLCKit.xcframework.zip "https://github.com/showbie/MobileVLCKit-SPM/releases/download/3.7.3/MobileVLCKit.xcframework.zip"
+          curl -L --retry 3 --retry-delay 2 -o MobileVLCKit.xcframework.zip "https://github.com/showbie/MobileVLCKit-SPM/releases/download/3.7.3/MobileVLCKit.xcframework.zip"
           unzip -q MobileVLCKit.xcframework.zip -d Frameworks/
           rm -f MobileVLCKit.xcframework.zip
           echo "MobileVLCKit extracted successfully:"
@@ -135,8 +139,6 @@ jobs:
                     - "$(PROJECT_DIR)/Frameworks/MobileVLCKit.xcframework/ios-arm64"
                   OTHER_LDFLAGS:
                     - "$(inherited)"
-                    - "-framework"
-                    - "MobileVLCKit"
                     - "-lc++"
                     - "-lbz2"
                     - "-lz"
@@ -186,5 +188,5 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: StreamOS-IPA
+          name: StreamOS-IPA-${{ matrix.runner }}
           path: StreamOS.ipa

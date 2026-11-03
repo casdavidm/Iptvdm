@@ -36,8 +36,6 @@ targets:
           - "$(PROJECT_DIR)/Frameworks/MobileVLCKit.xcframework/ios-arm64"
         OTHER_LDFLAGS:
           - "$(inherited)"
-          - "-framework"
-          - "MobileVLCKit"
           - "-lc++"
           - "-lbz2"
           - "-lz"

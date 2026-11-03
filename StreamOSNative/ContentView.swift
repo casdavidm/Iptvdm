@@ -455,6 +455,7 @@ struct VLCPlayerView: UIViewRepresentable {
 // MARK: - Native Player with Respected Pause & Smooth Continuous Playback
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
+    @Binding var isPlaying: Bool
 
     class Coordinator: NSObject {
         var currentUrl: String = ""
@@ -605,7 +606,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.showsPlaybackControls = true
+        controller.showsPlaybackControls = false
         controller.videoGravity = .resizeAspect
         controller.allowsPictureInPicturePlayback = true
         return controller
@@ -647,7 +648,15 @@ struct NativePlayerView: UIViewControllerRepresentable {
             context.coordinator.setup(player: player, streamUrl: targetUrl)
 
             uiViewController.player = player
-            player.play()
+            if isPlaying {
+                player.play()
+            }
+        } else {
+            if isPlaying && (context.coordinator.player?.timeControlStatus == .paused || context.coordinator.player?.rate == 0) {
+                context.coordinator.player?.playImmediately(atRate: 1.0)
+            } else if !isPlaying && (context.coordinator.player?.timeControlStatus != .paused && context.coordinator.player?.rate != 0) {
+                context.coordinator.player?.pause()
+            }
         }
     }
 
@@ -688,7 +697,7 @@ struct ContentView: View {
                         VLCPlayerView(streamUrl: selected.tsUrl, isPlaying: $isPlaying)
                             .background(Color.black)
                         #else
-                        NativePlayerView(streamUrl: selected.hlsUrl)
+                        NativePlayerView(streamUrl: selected.hlsUrl, isPlaying: $isPlaying)
                             .background(Color.black)
                         #endif
 
@@ -860,6 +869,7 @@ struct ContentView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            isPlaying = true
                             iptv.selectedChannel = channel
                         }
                     }
