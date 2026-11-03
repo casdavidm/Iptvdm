@@ -13,13 +13,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
+      - name: Install Tools
         run: |
           brew install xcodegen
 
-      - name: Clean Environment
+      - name: Download Precompiled MobileVLCKit XCFramework
         run: |
-          rm -rf Frameworks Podfile Podfile.lock Pods Payload *.ipa build
+          mkdir -p Frameworks
+          echo "Downloading MobileVLCKit official XCFramework binary..."
+          curl -L -o MobileVLCKit.xcframework.zip "https://github.com/showbie/MobileVLCKit-SPM/releases/download/3.7.3/MobileVLCKit.xcframework.zip"
+          unzip -q MobileVLCKit.xcframework.zip -d Frameworks/
+          rm -f MobileVLCKit.xcframework.zip
+          echo "MobileVLCKit extracted successfully:"
+          ls -ld Frameworks/MobileVLCKit.xcframework
 
       - name: Create Info.plist with Domain Specific ATS
         run: |
@@ -105,6 +111,9 @@ jobs:
                 - path: StreamOSNative
                   excludes:
                     - "Info.plist"
+              dependencies:
+                - framework: Frameworks/MobileVLCKit.xcframework
+                  embed: true
               settings:
                 base:
                   PRODUCT_BUNDLE_IDENTIFIER: com.casdavidm.streamos
@@ -118,6 +127,20 @@ jobs:
                   MARKETING_VERSION: "1.0"
                   SWIFT_VERSION: "5.0"
                   ENABLE_BITCODE: NO
+                  DEFINES_MODULE: YES
+                  ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: YES
+                  FRAMEWORK_SEARCH_PATHS:
+                    - "$(inherited)"
+                    - "$(PROJECT_DIR)/Frameworks"
+                    - "$(PROJECT_DIR)/Frameworks/MobileVLCKit.xcframework/ios-arm64"
+                  OTHER_LDFLAGS:
+                    - "$(inherited)"
+                    - "-framework"
+                    - "MobileVLCKit"
+                    - "-lc++"
+                    - "-lbz2"
+                    - "-lz"
+                    - "-liconv"
           EOF
 
       - name: Generate Xcode Project
@@ -145,6 +168,18 @@ jobs:
           cp StreamOSNative/Info.plist Payload/StreamOS.app/Info.plist
           plutil -convert binary1 Payload/StreamOS.app/Info.plist
           plutil -p Payload/StreamOS.app/Info.plist | grep -A 5 NSAppTransportSecurity || true
+          
+          # Verificar presencia de MobileVLCKit.framework
+          if [ -d "Frameworks/MobileVLCKit.xcframework/ios-arm64/MobileVLCKit.framework" ]; then
+            mkdir -p Payload/StreamOS.app/Frameworks
+            if [ ! -d "Payload/StreamOS.app/Frameworks/MobileVLCKit.framework" ]; then
+              echo "Embedding MobileVLCKit.framework into App bundle..."
+              cp -R Frameworks/MobileVLCKit.xcframework/ios-arm64/MobileVLCKit.framework Payload/StreamOS.app/Frameworks/
+            fi
+            echo "Frameworks in app:"
+            ls -ld Payload/StreamOS.app/Frameworks/*
+          fi
+
           zip -qr StreamOS.ipa Payload
           ls -lh StreamOS.ipa
 

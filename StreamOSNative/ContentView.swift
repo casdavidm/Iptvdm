@@ -42,12 +42,18 @@ class IPTVManager: ObservableObject {
     @Published var username: String = UserDefaults.standard.string(forKey: "xc_user") ?? "DavidMunoz1" {
         didSet { UserDefaults.standard.set(username, forKey: "xc_user") }
     }
-    @Published var password: String = UserDefaults.standard.string(forKey: "xc_pass") ?? "" {
+    @Published var password: String = {
+        let saved = UserDefaults.standard.string(forKey: "xc_pass") ?? ""
+        return saved.isEmpty ? "8kz1MRT1r2" : saved
+    }() {
         didSet { UserDefaults.standard.set(password, forKey: "xc_pass") }
     }
 
     init() {
-        // Desactivar caché para forzar a AVPlayer a descargar los manifiestos HLS frescos sin congelarse
+        if (UserDefaults.standard.string(forKey: "xc_pass") ?? "").isEmpty {
+            UserDefaults.standard.set("8kz1MRT1r2", forKey: "xc_pass")
+        }
+        // Desactivar caché para forzar a descargar listas frescas sin congelarse
         URLCache.shared = URLCache(memoryCapacity: 0, diskCapacity: 0, diskPath: nil)
     }
 
@@ -359,6 +365,93 @@ class IPTVManager: ObservableObject {
     }
 }
 
+// MARK: - VLC Player (MobileVLCKit) - Motor Profesional para MPEG-TS sin Cortes
+#if canImport(MobileVLCKit)
+import MobileVLCKit
+
+struct VLCPlayerView: UIViewRepresentable {
+    let streamUrl: String
+    @Binding var isPlaying: Bool
+
+    class Coordinator: NSObject, VLCMediaPlayerDelegate {
+        var mediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
+        var currentUrl: String = ""
+        var parent: VLCPlayerView
+
+        init(_ parent: VLCPlayerView) {
+            self.parent = parent
+            super.init()
+            mediaPlayer.delegate = self
+        }
+
+        func playStream(url: String) {
+            guard !url.isEmpty, let mediaUrl = URL(string: url) else { return }
+            currentUrl = url
+
+            if mediaPlayer.isPlaying {
+                mediaPlayer.stop()
+            }
+
+            let media = VLCMedia(url: mediaUrl)
+            // Buffer y sincronización continua para streams en vivo MPEG-TS
+            media.addOptions([
+                "network-caching": 2500,
+                ":network-caching": 2500,
+                ":clock-jitter": 0,
+                ":clock-synchro": 0,
+                ":http-user-agent": "IPTVSmartersPro/3.1.5"
+            ])
+            mediaPlayer.media = media
+            mediaPlayer.play()
+
+            DispatchQueue.main.async {
+                self.parent.isPlaying = true
+            }
+        }
+
+        func mediaPlayerStateChanged(_ aNotification: Notification) {
+            DispatchQueue.main.async {
+                self.parent.isPlaying = self.mediaPlayer.isPlaying
+            }
+        }
+
+        deinit {
+            mediaPlayer.stop()
+            mediaPlayer.drawable = nil
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .black
+        context.coordinator.mediaPlayer.drawable = view
+        context.coordinator.playStream(url: streamUrl)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        if context.coordinator.currentUrl != streamUrl {
+            context.coordinator.playStream(url: streamUrl)
+        } else {
+            if isPlaying && !context.coordinator.mediaPlayer.isPlaying {
+                context.coordinator.mediaPlayer.play()
+            } else if !isPlaying && context.coordinator.mediaPlayer.isPlaying {
+                context.coordinator.mediaPlayer.pause()
+            }
+        }
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.mediaPlayer.stop()
+        coordinator.mediaPlayer.drawable = nil
+    }
+}
+#endif
+
 // MARK: - Native Player with Respected Pause & Smooth Continuous Playback
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
@@ -399,18 +492,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             ) { [weak player] _ in
                 guard let p = player else { return }
                 if p.timeControlStatus == .paused || p.rate == 0 { return }
-
-                // Mantener el item actual y avanzar hacia el borde en vivo (SIN pantalla negra)
-                if let timeRanges = p.currentItem?.seekableTimeRanges,
-                   let lastRange = timeRanges.last?.timeRangeValue {
-                    let liveEdge = CMTimeAdd(lastRange.start, lastRange.duration)
-                    let safePoint = CMTimeSubtract(liveEdge, CMTime(seconds: 2.0, preferredTimescale: 600))
-                    p.seek(to: safePoint, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                        p.playImmediately(atRate: 1.0)
-                    }
-                } else {
-                    p.playImmediately(atRate: 1.0)
-                }
+                // Reanudación inmediata sin seek para no purgar el decodificador ni causar pantalla negra
+                p.playImmediately(atRate: 1.0)
             }
 
             startWatchdog(for: player)
@@ -435,7 +518,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 if isWaiting || isFrozen {
                     self.stallSeconds += 2.0
 
-                    // Nivel 1: A los 6 segundos de congelamiento, avance suave al borde en vivo SIN pantalla negra
+                    // Nivel 1: A los 6 segundos de congelamiento, avance suave sin pantalla negra
                     if self.stallSeconds >= 6.0 && self.stallSeconds < 14.0 {
                         self.smoothRecoverLiveEdge(player: player)
                     } else if self.stallSeconds >= 14.0 {
@@ -452,18 +535,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         func smoothRecoverLiveEdge(player: AVPlayer) {
             guard player.timeControlStatus != .paused && player.rate != 0 else { return }
-
             // Reanudación inmediata en el pipeline actual sin destruir la vista
             player.playImmediately(atRate: 1.0)
-
-            if let timeRanges = player.currentItem?.seekableTimeRanges,
-               let lastRange = timeRanges.last?.timeRangeValue {
-                let liveEdge = CMTimeAdd(lastRange.start, lastRange.duration)
-                let safePoint = CMTimeSubtract(liveEdge, CMTime(seconds: 2.0, preferredTimescale: 600))
-                player.seek(to: safePoint, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                    player.playImmediately(atRate: 1.0)
-                }
-            }
         }
 
         func hardReconnect(player: AVPlayer) {
@@ -591,6 +664,18 @@ struct NativePlayerView: UIViewControllerRepresentable {
 struct ContentView: View {
     @StateObject private var iptv = IPTVManager()
     @State private var showSettings = false
+    @State private var isPlaying: Bool = true
+    @State private var showControls: Bool = false
+    @State private var controlsTimer: Timer? = nil
+
+    func resetControlsTimer() {
+        controlsTimer?.invalidate()
+        controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showControls = false
+            }
+        }
+    }
 
     var body: some View {
         NavigationView {
@@ -598,8 +683,41 @@ struct ContentView: View {
                 
                 ZStack {
                     if let selected = iptv.selectedChannel {
+                        #if canImport(MobileVLCKit)
+                        // Con MobileVLCKit transmitimos directo el flujo MPEG-TS sin cortes
+                        VLCPlayerView(streamUrl: selected.tsUrl, isPlaying: $isPlaying)
+                            .background(Color.black)
+                        #else
                         NativePlayerView(streamUrl: selected.hlsUrl)
                             .background(Color.black)
+                        #endif
+
+                        // Overlay de controles táctiles: tap para mostrar/ocultar Play/Pause
+                        ZStack {
+                            if showControls {
+                                Color.black.opacity(0.35)
+                                    .transition(.opacity)
+
+                                Button(action: {
+                                    isPlaying.toggle()
+                                    resetControlsTimer()
+                                }) {
+                                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                        .font(.system(size: 60))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 8)
+                                }
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showControls.toggle()
+                            }
+                            if showControls {
+                                resetControlsTimer()
+                            }
+                        }
                     } else {
                         Rectangle()
                             .fill(Color.black)
