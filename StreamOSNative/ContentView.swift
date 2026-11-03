@@ -46,6 +46,11 @@ class IPTVManager: ObservableObject {
         didSet { UserDefaults.standard.set(password, forKey: "xc_pass") }
     }
 
+    init() {
+        // Desactivar caché para forzar a AVPlayer a descargar los manifiestos HLS frescos sin congelarse
+        URLCache.shared = URLCache(memoryCapacity: 0, diskCapacity: 0, diskPath: nil)
+    }
+
     private lazy var customSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
@@ -354,7 +359,7 @@ class IPTVManager: ObservableObject {
     }
 }
 
-// MARK: - Native Player with Active Timer Watchdog & Resilient Auto-Reload
+// MARK: - Native Player with Respected Pause & Smooth Continuous Playback
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
 
@@ -364,28 +369,79 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var watchdogTimer: Timer?
         private var stallSeconds: Double = 0
         private var lastObservedTime: Double = -1.0
+        private var stallObserver: Any?
+        private var endObserver: Any?
 
-        func startWatchdog(for player: AVPlayer) {
-            stopWatchdog()
+        func setup(player: AVPlayer, streamUrl: String) {
             self.player = player
+            self.currentUrl = streamUrl
             self.lastObservedTime = -1.0
             self.stallSeconds = 0
 
-            // Timer activo en el RunLoop principal: no depende de AVPlayer y se ejecuta aunque el video esté congelado
-            watchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self, weak player] _ in
+            cleanObservers()
+
+            // 1. Manejador de microcortes de red: reanuda inmediatamente si el usuario no pausó
+            stallObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemPlaybackStalled,
+                object: player.currentItem,
+                queue: .main
+            ) { [weak player] _ in
+                guard let p = player else { return }
+                if p.timeControlStatus == .paused || p.rate == 0 { return }
+                p.playImmediately(atRate: 1.0)
+            }
+
+            // 2. Si el reproductor alcanza el fin del buffer de fragmentos disponibles
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: player.currentItem,
+                queue: .main
+            ) { [weak player] _ in
+                guard let p = player else { return }
+                if p.timeControlStatus == .paused || p.rate == 0 { return }
+
+                // Mantener el item actual y avanzar hacia el borde en vivo (SIN pantalla negra)
+                if let timeRanges = p.currentItem?.seekableTimeRanges,
+                   let lastRange = timeRanges.last?.timeRangeValue {
+                    let liveEdge = CMTimeAdd(lastRange.start, lastRange.duration)
+                    let safePoint = CMTimeSubtract(liveEdge, CMTime(seconds: 2.0, preferredTimescale: 600))
+                    p.seek(to: safePoint, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                        p.playImmediately(atRate: 1.0)
+                    }
+                } else {
+                    p.playImmediately(atRate: 1.0)
+                }
+            }
+
+            startWatchdog(for: player)
+        }
+
+        func startWatchdog(for player: AVPlayer) {
+            stopWatchdog()
+
+            watchdogTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self, weak player] _ in
                 guard let self = self, let player = player else { return }
-                
+
+                // REGLA FUNDAMENTAL: Si el usuario pausó la reproducción, se respeta al 100%
+                if player.timeControlStatus == .paused || player.rate == 0 {
+                    self.stallSeconds = 0
+                    return
+                }
+
                 let currentItemTime = player.currentTime().seconds
-                let isPlaying = player.timeControlStatus == .playing
-                
-                // Si el tiempo del video no avanza o el player cayó en espera/pausa por microcorte
-                if !isPlaying || (currentItemTime > 0 && abs(currentItemTime - self.lastObservedTime) < 0.1) {
-                    self.stallSeconds += 1.5
-                    
-                    // Si lleva 3 segundos congelado, forzar recarga al vuelo del live stream
-                    if self.stallSeconds >= 3.0 {
+                let isWaiting = (player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+                let isFrozen = (currentItemTime > 0 && abs(currentItemTime - self.lastObservedTime) < 0.05)
+
+                if isWaiting || isFrozen {
+                    self.stallSeconds += 2.0
+
+                    // Nivel 1: A los 6 segundos de congelamiento, avance suave al borde en vivo SIN pantalla negra
+                    if self.stallSeconds >= 6.0 && self.stallSeconds < 14.0 {
+                        self.smoothRecoverLiveEdge(player: player)
+                    } else if self.stallSeconds >= 14.0 {
+                        // Nivel 2: Solo si el stream estuvo muerto por más de 14s, reconexión de seguridad
                         self.stallSeconds = 0
-                        self.recoverPlayback(player: player)
+                        self.hardReconnect(player: player)
                     }
                 } else {
                     self.stallSeconds = 0
@@ -394,10 +450,26 @@ struct NativePlayerView: UIViewControllerRepresentable {
             }
         }
 
-        func recoverPlayback(player: AVPlayer) {
+        func smoothRecoverLiveEdge(player: AVPlayer) {
+            guard player.timeControlStatus != .paused && player.rate != 0 else { return }
+
+            // Reanudación inmediata en el pipeline actual sin destruir la vista
+            player.playImmediately(atRate: 1.0)
+
+            if let timeRanges = player.currentItem?.seekableTimeRanges,
+               let lastRange = timeRanges.last?.timeRangeValue {
+                let liveEdge = CMTimeAdd(lastRange.start, lastRange.duration)
+                let safePoint = CMTimeSubtract(liveEdge, CMTime(seconds: 2.0, preferredTimescale: 600))
+                player.seek(to: safePoint, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                    player.playImmediately(atRate: 1.0)
+                }
+            }
+        }
+
+        func hardReconnect(player: AVPlayer) {
             guard !currentUrl.isEmpty, let url = URL(string: currentUrl) else { return }
-            
-            // Re-instanciar el item para descargar el manifiesto en vivo fresco y saltar el bloqueo
+            guard player.timeControlStatus != .paused && player.rate != 0 else { return }
+
             let userAgent = "IPTVSmartersPro/3.1.5"
             let options: [String: Any] = [
                 "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": userAgent],
@@ -405,11 +477,40 @@ struct NativePlayerView: UIViewControllerRepresentable {
             ]
             let asset = AVURLAsset(url: url, options: options)
             let newItem = AVPlayerItem(asset: asset)
-            newItem.preferredForwardBufferDuration = 0
+            newItem.preferredForwardBufferDuration = 10.0
             newItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            
+
+            cleanObservers()
             player.replaceCurrentItem(with: newItem)
+
+            stallObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemPlaybackStalled,
+                object: newItem,
+                queue: .main
+            ) { [weak player] _ in
+                guard let p = player else { return }
+                if p.timeControlStatus == .paused || p.rate == 0 { return }
+                p.playImmediately(atRate: 1.0)
+            }
+
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: newItem,
+                queue: .main
+            ) { [weak player] _ in
+                guard let p = player else { return }
+                if p.timeControlStatus == .paused || p.rate == 0 { return }
+                p.playImmediately(atRate: 1.0)
+            }
+
             player.play()
+        }
+
+        func cleanObservers() {
+            if let obs = stallObserver { NotificationCenter.default.removeObserver(obs) }
+            if let obs = endObserver { NotificationCenter.default.removeObserver(obs) }
+            stallObserver = nil
+            endObserver = nil
         }
 
         func stopWatchdog() {
@@ -421,6 +522,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         deinit {
             stopWatchdog()
+            cleanObservers()
         }
     }
 
@@ -437,17 +539,24 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        if context.coordinator.currentUrl != streamUrl {
-            context.coordinator.currentUrl = streamUrl
-            
-            // 1. Detener por completo el stream y timer anterior
+        // Asegurar que use siempre formato HLS compatible con iOS
+        var targetUrl = streamUrl
+        if targetUrl.hasSuffix(".ts") {
+            targetUrl = String(targetUrl.dropLast(3)) + ".m3u8"
+        }
+
+        if context.coordinator.currentUrl != targetUrl {
+            context.coordinator.currentUrl = targetUrl
+
+            // 1. Detener por completo el stream y observadores anteriores
             context.coordinator.stopWatchdog()
+            context.coordinator.cleanObservers()
             context.coordinator.player?.pause()
             context.coordinator.player?.replaceCurrentItem(with: nil)
-            
-            guard let url = URL(string: streamUrl) else { return }
-            
-            // 2. User-Agent a nivel GLOBAL de la sesión y de los fragmentos HLS:
+
+            guard let url = URL(string: targetUrl) else { return }
+
+            // 2. User-Agent a nivel de conexión y fragmentos:
             let userAgent = "IPTVSmartersPro/3.1.5"
             let options: [String: Any] = [
                 "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": userAgent],
@@ -455,21 +564,23 @@ struct NativePlayerView: UIViewControllerRepresentable {
             ]
             let asset = AVURLAsset(url: url, options: options)
             let item = AVPlayerItem(asset: asset)
-            item.preferredForwardBufferDuration = 0
+            // Buffer adelantado de 10s: absorbe microcortes y evita pausas entre fragmentos
+            item.preferredForwardBufferDuration = 10.0
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-            
+
             let player = AVPlayer(playerItem: item)
             player.automaticallyWaitsToMinimizeStalling = true
-            
-            context.coordinator.startWatchdog(for: player)
-            
+
+            context.coordinator.setup(player: player, streamUrl: targetUrl)
+
             uiViewController.player = player
             player.play()
         }
     }
-    
+
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.stopWatchdog()
+        coordinator.cleanObservers()
         uiViewController.player?.pause()
         uiViewController.player?.replaceCurrentItem(with: nil)
         uiViewController.player = nil
@@ -480,7 +591,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
 struct ContentView: View {
     @StateObject private var iptv = IPTVManager()
     @State private var showSettings = false
-    @State private var useTsFormat = false
 
     var body: some View {
         NavigationView {
@@ -488,7 +598,7 @@ struct ContentView: View {
                 
                 ZStack {
                     if let selected = iptv.selectedChannel {
-                        NativePlayerView(streamUrl: useTsFormat ? selected.tsUrl : selected.hlsUrl)
+                        NativePlayerView(streamUrl: selected.hlsUrl)
                             .background(Color.black)
                     } else {
                         Rectangle()
@@ -524,14 +634,27 @@ struct ContentView: View {
                             .foregroundColor(.gray)
                     }
                     Spacer()
-                    Button(action: { useTsFormat.toggle() }) {
-                        Text(useTsFormat ? "TS" : "HLS")
-                            .font(.caption.bold())
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.red.opacity(0.2))
-                            .foregroundColor(.red)
-                            .cornerRadius(8)
+                    Button(action: {
+                        // Re-sincronizar el canal actual con el borde en vivo
+                        if let current = iptv.selectedChannel {
+                            iptv.selectedChannel = nil
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                iptv.selectedChannel = current
+                            }
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 7, height: 7)
+                            Text("EN VIVO")
+                                .font(.caption2.bold())
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.red.opacity(0.18))
+                        .foregroundColor(.red)
+                        .cornerRadius(8)
                     }
                     Button(action: { iptv.fetchChannels() }) {
                         Image(systemName: "arrow.clockwise")
