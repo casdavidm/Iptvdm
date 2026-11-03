@@ -7,11 +7,7 @@ on:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        runner: [macos-14, macos-15-intel]
-      fail-fast: false
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15-intel
 
     steps:
       - name: Checkout Code
@@ -188,5 +184,5 @@ jobs:
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: StreamOS-IPA-${{ matrix.runner }}
+          name: StreamOS-IPA
           path: StreamOS.ipa
