@@ -403,15 +403,21 @@ struct VLCPlayerView: UIViewRepresentable {
             ])
             mediaPlayer.media = media
             mediaPlayer.play()
+        }
 
-            DispatchQueue.main.async {
-                self.parent.isPlaying = true
+        func pauseStream() {
+            if mediaPlayer.canPause {
+                mediaPlayer.pause()
+            } else {
+                mediaPlayer.stop()
             }
         }
 
-        func mediaPlayerStateChanged(_ aNotification: Notification) {
-            DispatchQueue.main.async {
-                self.parent.isPlaying = self.mediaPlayer.isPlaying
+        func resumeStream() {
+            if mediaPlayer.state == .paused {
+                mediaPlayer.play()
+            } else if !currentUrl.isEmpty {
+                playStream(url: currentUrl)
             }
         }
 
@@ -429,7 +435,9 @@ struct VLCPlayerView: UIViewRepresentable {
         let view = UIView()
         view.backgroundColor = .black
         context.coordinator.mediaPlayer.drawable = view
-        context.coordinator.playStream(url: streamUrl)
+        if isPlaying {
+            context.coordinator.playStream(url: streamUrl)
+        }
         return view
     }
 
@@ -437,10 +445,14 @@ struct VLCPlayerView: UIViewRepresentable {
         if context.coordinator.currentUrl != streamUrl {
             context.coordinator.playStream(url: streamUrl)
         } else {
-            if isPlaying && !context.coordinator.mediaPlayer.isPlaying {
-                context.coordinator.mediaPlayer.play()
-            } else if !isPlaying && context.coordinator.mediaPlayer.isPlaying {
-                context.coordinator.mediaPlayer.pause()
+            if isPlaying {
+                if !context.coordinator.mediaPlayer.isPlaying {
+                    context.coordinator.resumeStream()
+                }
+            } else {
+                if context.coordinator.mediaPlayer.isPlaying {
+                    context.coordinator.pauseStream()
+                }
             }
         }
     }
@@ -674,22 +686,43 @@ struct ContentView: View {
     @StateObject private var iptv = IPTVManager()
     @State private var showSettings = false
     @State private var isPlaying: Bool = true
-    @State private var showControls: Bool = false
+    @State private var isFullScreen: Bool = false
+    @State private var showControls: Bool = true
     @State private var controlsTimer: Timer? = nil
 
     func resetControlsTimer() {
         controlsTimer?.invalidate()
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { _ in
-            withAnimation(.easeInOut(duration: 0.2)) {
+        // Si la reproducción está en pausa, mantenemos los controles visibles para que el usuario pueda pulsar Play
+        guard isPlaying else { return }
+        controlsTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { _ in
+            withAnimation(.easeInOut(duration: 0.25)) {
                 showControls = false
             }
         }
+    }
+
+    func toggleControls() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showControls.toggle()
+        }
+        if showControls {
+            resetControlsTimer()
+        }
+    }
+
+    func toggleFullScreen() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            isFullScreen.toggle()
+        }
+        showControls = true
+        resetControlsTimer()
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 
+                // Contenedor del Reproductor de Video
                 ZStack {
                     if let selected = iptv.selectedChannel {
                         #if canImport(MobileVLCKit)
@@ -701,31 +734,134 @@ struct ContentView: View {
                             .background(Color.black)
                         #endif
 
-                        // Overlay de controles táctiles: tap para mostrar/ocultar Play/Pause
-                        ZStack {
-                            if showControls {
-                                Color.black.opacity(0.35)
-                                    .transition(.opacity)
+                        // Superficie transparente activa que cubre el 100% del reproductor para detectar toques
+                        Color.black.opacity(showControls ? 0.45 : 0.001)
+                            .edgesIgnoringSafeArea(.all)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                toggleControls()
+                            }
 
-                                Button(action: {
-                                    isPlaying.toggle()
-                                    resetControlsTimer()
-                                }) {
-                                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                        .font(.system(size: 60))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 8)
+                        // Capa de Controles del Reproductor (Overlay)
+                        if showControls {
+                            VStack(spacing: 0) {
+                                // Barra superior del reproductor
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(selected.name)
+                                            .font(.system(size: isFullScreen ? 18 : 15, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .lineLimit(1)
+                                            .shadow(color: .black.opacity(0.85), radius: 3)
+                                        HStack(spacing: 6) {
+                                            Circle()
+                                                .fill(isPlaying ? Color.red : Color.orange)
+                                                .frame(width: 7, height: 7)
+                                            Text(isPlaying ? "EN VIVO" : "PAUSADO")
+                                                .font(.caption2.bold())
+                                                .foregroundColor(.white)
+                                            Text("•")
+                                                .font(.caption2)
+                                                .foregroundColor(.white.opacity(0.6))
+                                            Text(selected.category)
+                                                .font(.caption2)
+                                                .foregroundColor(.white.opacity(0.85))
+                                        }
+                                        .shadow(color: .black.opacity(0.85), radius: 3)
+                                    }
+
+                                    Spacer()
+
+                                    // Botón de pantalla completa superior
+                                    Button(action: {
+                                        toggleFullScreen()
+                                    }) {
+                                        Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                                            .font(.system(size: 16, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .frame(width: 38, height: 38)
+                                            .background(Color.black.opacity(0.65))
+                                            .clipShape(Circle())
+                                    }
                                 }
+                                .padding(.horizontal, 16)
+                                .padding(.top, isFullScreen ? 44 : 12)
+
+                                Spacer()
+
+                                // Botón Central de Play / Pausa
+                                HStack {
+                                    Spacer()
+                                    Button(action: {
+                                        isPlaying.toggle()
+                                        resetControlsTimer()
+                                    }) {
+                                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                            .font(.system(size: isFullScreen ? 42 : 34, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .frame(width: isFullScreen ? 82 : 68, height: isFullScreen ? 82 : 68)
+                                            .background(Color.black.opacity(0.65))
+                                            .clipShape(Circle())
+                                            .overlay(
+                                                Circle()
+                                                    .stroke(Color.white.opacity(0.35), lineWidth: 1.5)
+                                            )
+                                            .shadow(color: .black.opacity(0.6), radius: 8)
+                                    }
+                                    Spacer()
+                                }
+
+                                Spacer()
+
+                                // Barra inferior del reproductor
+                                HStack {
+                                    // Sincronizar en vivo
+                                    Button(action: {
+                                        if let current = iptv.selectedChannel {
+                                            iptv.selectedChannel = nil
+                                            isPlaying = true
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                                iptv.selectedChannel = current
+                                            }
+                                        }
+                                        resetControlsTimer()
+                                    }) {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: "arrow.clockwise")
+                                                .font(.caption2.bold())
+                                            Text("Sincronizar En Vivo")
+                                                .font(.caption2.bold())
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.black.opacity(0.65))
+                                        .cornerRadius(12)
+                                    }
+
+                                    Spacer()
+
+                                    // Botón de pantalla completa inferior
+                                    Button(action: {
+                                        toggleFullScreen()
+                                    }) {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "viewfinder")
+                                                .font(.caption.bold())
+                                            Text(isFullScreen ? "Salir" : "Pantalla Completa")
+                                                .font(.caption2.bold())
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.black.opacity(0.65))
+                                        .cornerRadius(12)
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, isFullScreen ? 34 : 12)
                             }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showControls.toggle()
-                            }
-                            if showControls {
-                                resetControlsTimer()
-                            }
+                            .transition(.opacity)
                         }
                     } else {
                         Rectangle()
@@ -747,136 +883,178 @@ struct ContentView: View {
                             )
                     }
                 }
-                .frame(height: UIScreen.main.bounds.width * 9 / 16)
                 .frame(maxWidth: .infinity)
+                .frame(height: isFullScreen ? nil : (UIScreen.main.bounds.width * 9 / 16))
+                .frame(maxHeight: isFullScreen ? .infinity : nil)
                 .background(Color.black)
 
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(iptv.selectedChannel?.name ?? "StreamOS")
-                            .font(.headline)
-                            .lineLimit(1)
-                        Text(iptv.selectedChannel?.category ?? "En vivo")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                    }
-                    Spacer()
-                    Button(action: {
-                        // Re-sincronizar el canal actual con el borde en vivo
-                        if let current = iptv.selectedChannel {
-                            iptv.selectedChannel = nil
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                iptv.selectedChannel = current
-                            }
+                if !isFullScreen {
+                    // Barra de información y controles rápidos debajo del reproductor
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(iptv.selectedChannel?.name ?? "StreamOS")
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text(iptv.selectedChannel?.category ?? "En vivo")
+                                .font(.caption2)
+                                .foregroundColor(.gray)
                         }
-                    }) {
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 7, height: 7)
-                            Text("EN VIVO")
-                                .font(.caption2.bold())
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color.red.opacity(0.18))
-                        .foregroundColor(.red)
-                        .cornerRadius(8)
-                    }
-                    Button(action: { iptv.fetchChannels() }) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.subheadline)
-                            .padding(8)
-                            .background(Color(.secondarySystemBackground))
-                            .clipShape(Circle())
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(Color(.systemBackground))
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(iptv.categories, id: \.self) { cat in
-                            Button(action: { iptv.selectedCategory = cat }) {
-                                Text(cat)
-                                    .font(.caption.bold())
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(iptv.selectedCategory == cat ? Color.red : Color(.secondarySystemBackground))
-                                    .foregroundColor(iptv.selectedCategory == cat ? .white : .primary)
-                                    .cornerRadius(16)
+                        Spacer()
+
+                        // Botón directo de Play / Pausa debajo del video
+                        Button(action: {
+                            isPlaying.toggle()
+                            resetControlsTimer()
+                        }) {
+                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 30))
+                                .foregroundColor(isPlaying ? .red : .primary)
+                        }
+
+                        // Botón directo de Pantalla Completa debajo del video
+                        Button(action: {
+                            toggleFullScreen()
+                        }) {
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.system(size: 16, weight: .semibold))
+                                .padding(8)
+                                .background(Color(.secondarySystemBackground))
+                                .clipShape(Circle())
+                        }
+
+                        // Botón de re-sincronizar EN VIVO
+                        Button(action: {
+                            if let current = iptv.selectedChannel {
+                                iptv.selectedChannel = nil
+                                isPlaying = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    iptv.selectedChannel = current
+                                }
                             }
+                        }) {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(isPlaying ? Color.red : Color.gray)
+                                    .frame(width: 7, height: 7)
+                                Text("EN VIVO")
+                                    .font(.caption2.bold())
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.red.opacity(0.18))
+                            .foregroundColor(.red)
+                            .cornerRadius(8)
+                        }
+
+                        Button(action: { iptv.fetchChannels() }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.subheadline)
+                                .padding(8)
+                                .background(Color(.secondarySystemBackground))
+                                .clipShape(Circle())
                         }
                     }
                     .padding(.horizontal)
-                    .padding(.vertical, 4)
-                }
+                    .padding(.vertical, 8)
+                    .background(Color(.systemBackground))
 
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.gray)
-                    TextField("Buscar canal...", text: $iptv.searchText)
-                        .font(.subheadline)
-                    if !iptv.searchText.isEmpty {
-                        Button(action: { iptv.searchText = "" }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.gray)
+                    // Selector de categorías
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(iptv.categories, id: \.self) { cat in
+                                Button(action: {
+                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                    iptv.selectedCategory = cat
+                                }) {
+                                    Text(cat)
+                                        .font(.caption.bold())
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(iptv.selectedCategory == cat ? Color.red : Color(.secondarySystemBackground))
+                                        .foregroundColor(iptv.selectedCategory == cat ? .white : .primary)
+                                        .cornerRadius(16)
+                                }
+                            }
                         }
+                        .padding(.horizontal)
+                        .padding(.vertical, 4)
                     }
-                }
-                .padding(8)
-                .background(Color(.secondarySystemBackground))
-                .cornerRadius(10)
-                .padding(.horizontal)
-                .padding(.vertical, 4)
 
-                if let err = iptv.errorMessage {
-                    VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.yellow)
-                            .font(.largeTitle)
-                        Text(err)
+                    // Campo de búsqueda con descarte de teclado
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.gray)
+                        TextField("Buscar canal...", text: $iptv.searchText)
                             .font(.subheadline)
-                            .multilineTextAlignment(.center)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal)
-                        Button("Abrir Ajustes") {
-                            showSettings = true
-                        }
-                        .font(.caption.bold())
-                        .foregroundColor(.red)
-                    }
-                    .frame(maxHeight: .infinity)
-                } else {
-                    List(iptv.filteredChannels) { channel in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(channel.name)
-                                    .font(.subheadline)
-                                    .foregroundColor(iptv.selectedChannel?.id == channel.id ? .red : .primary)
-                                    .lineLimit(1)
-                                Text(channel.category)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            if iptv.selectedChannel?.id == channel.id {
-                                Image(systemName: "speaker.wave.2.fill")
-                                    .font(.caption)
-                                    .foregroundColor(.red)
+                        if !iptv.searchText.isEmpty {
+                            Button(action: {
+                                iptv.searchText = ""
+                                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.gray)
                             }
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            isPlaying = true
-                            iptv.selectedChannel = channel
-                        }
                     }
-                    .listStyle(PlainListStyle())
+                    .padding(8)
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(10)
+                    .padding(.horizontal)
+                    .padding(.vertical, 4)
+
+                    // Lista de canales
+                    if let err = iptv.errorMessage {
+                        VStack(spacing: 12) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.yellow)
+                                .font(.largeTitle)
+                            Text(err)
+                                .font(.subheadline)
+                                .multilineTextAlignment(.center)
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal)
+                            Button("Abrir Ajustes") {
+                                showSettings = true
+                            }
+                            .font(.caption.bold())
+                            .foregroundColor(.red)
+                        }
+                        .frame(maxHeight: .infinity)
+                    } else {
+                        List(iptv.filteredChannels) { channel in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(channel.name)
+                                        .font(.subheadline)
+                                        .foregroundColor(iptv.selectedChannel?.id == channel.id ? .red : .primary)
+                                        .lineLimit(1)
+                                    Text(channel.category)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if iptv.selectedChannel?.id == channel.id {
+                                    Image(systemName: isPlaying ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.red)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                isPlaying = true
+                                iptv.selectedChannel = channel
+                            }
+                        }
+                        .listStyle(PlainListStyle())
+                    }
                 }
             }
-            .navigationBarTitle("StreamOS", displayMode: .inline)
+            .edgesIgnoringSafeArea(isFullScreen ? .all : [])
+            .navigationBarTitle(isFullScreen ? "" : "StreamOS", displayMode: .inline)
+            .navigationBarHidden(isFullScreen)
+            .statusBar(hidden: isFullScreen)
             .navigationBarItems(trailing: Button(action: { showSettings = true }) {
                 Image(systemName: "gear")
             })
@@ -884,7 +1062,25 @@ struct ContentView: View {
                 SettingsView(iptv: iptv)
             }
         }
+        .navigationViewStyle(StackNavigationViewStyle())
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            let orientation = UIDevice.current.orientation
+            if orientation.isLandscape && !isFullScreen {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isFullScreen = true
+                }
+                showControls = true
+                resetControlsTimer()
+            } else if orientation == .portrait && isFullScreen {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isFullScreen = false
+                }
+                showControls = true
+                resetControlsTimer()
+            }
+        }
         .onAppear {
+            resetControlsTimer()
             if iptv.channels.isEmpty && !iptv.password.isEmpty {
                 iptv.fetchChannels()
             }
