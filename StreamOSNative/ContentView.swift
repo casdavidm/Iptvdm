@@ -122,20 +122,25 @@ class IPTVManager: ObservableObject {
     }()
 
     func isFavorite(_ channel: XtreamChannel) -> Bool {
-        favoriteIds.contains(channel.id)
+        let key = channel.streamId.isEmpty ? channel.id : channel.streamId
+        return favoriteIds.contains(key) || favoriteIds.contains(channel.id)
     }
 
     func toggleFavorite(_ channel: XtreamChannel) {
-        if favoriteIds.contains(channel.id) {
+        let key = channel.streamId.isEmpty ? channel.id : channel.streamId
+        if isFavorite(channel) {
+            favoriteIds.remove(key)
+            favoriteIds.remove(channel.streamId)
             favoriteIds.remove(channel.id)
         } else {
-            favoriteIds.insert(channel.id)
+            favoriteIds.insert(key)
         }
     }
 
     func recordWatched(_ channel: XtreamChannel) {
-        var recents = recentIds.filter { $0 != channel.id }
-        recents.insert(channel.id, at: 0)
+        let key = channel.streamId.isEmpty ? channel.id : channel.streamId
+        var recents = recentIds.filter { $0 != key && $0 != channel.id }
+        recents.insert(key, at: 0)
         if recents.count > 60 { recents = Array(recents.prefix(60)) }
         recentIds = recents
     }
@@ -250,7 +255,9 @@ class IPTVManager: ObservableObject {
                     }
 
                     var cat = "General"
-                    if let nameMatch = sName.range(of: "^[A-Za-z0-9\\s]{2,10}[|:\\-]", options: .regularExpression) {
+                    if let catName = item["category_name"] as? String, !catName.trimmingCharacters(in: .whitespaces).isEmpty {
+                        cat = catName.trimmingCharacters(in: .whitespaces)
+                    } else if let nameMatch = sName.range(of: "^[A-Za-z0-9\\s]{2,10}[|:\\-]", options: .regularExpression) {
                         cat = String(sName[nameMatch].dropLast()).trimmingCharacters(in: .whitespaces)
                     }
                     catsSet.insert(cat)
@@ -261,8 +268,11 @@ class IPTVManager: ObservableObject {
                     let hls = "\(base)/live/\(cleanUser)/\(cleanPass)/\(streamIdStr).m3u8"
                     let ts = "\(base)/\(cleanUser)/\(cleanPass)/\(streamIdStr)"
 
+                    // Cada fila en la lista debe tener un id único estricto para que SwiftUI LazyVStack no deje 'espacios fantasma' cuando se repite un canal
+                    let uniqueRowId = "xc-\(streamIdStr)-\(parsed.count + 1)"
+
                     parsed.append(XtreamChannel(
-                        id: "xc-\(streamIdStr)",
+                        id: uniqueRowId,
                         streamId: streamIdStr,
                         name: sName,
                         category: cat,
@@ -468,14 +478,29 @@ class IPTVManager: ObservableObject {
                 result = result.filter { $0.category == selectedCategory }
             }
         case .favorites:
-            result = result.filter { favoriteIds.contains($0.id) }
+            var favList: [XtreamChannel] = []
+            var seenKeys = Set<String>()
+            for ch in channels {
+                if isFavorite(ch) {
+                    let key = ch.streamId.isEmpty ? ch.id : ch.streamId
+                    if !seenKeys.contains(key) {
+                        seenKeys.insert(key)
+                        favList.append(ch)
+                    }
+                }
+            }
+            result = favList
         case .recent:
-            // Conservar el orden cronológico de recientes
+            // Conservar el orden cronológico de recientes de forma 100% segura (sin Dictionary fatalError)
             var recentOrdered: [XtreamChannel] = []
-            let map = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
+            var seenKeys = Set<String>()
             for rId in recentIds {
-                if let ch = map[rId] {
-                    recentOrdered.append(ch)
+                if let ch = channels.first(where: { $0.streamId == rId || $0.id == rId }) {
+                    let key = ch.streamId.isEmpty ? ch.id : ch.streamId
+                    if !seenKeys.contains(key) {
+                        seenKeys.insert(key)
+                        recentOrdered.append(ch)
+                    }
                 }
             }
             result = recentOrdered
@@ -1596,10 +1621,11 @@ struct ContentView: View {
                                 if iptv.isGridView {
                                     // Vista Cuadrícula
                                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                                        ForEach(iptv.filteredChannels) { channel in
+                                        ForEach(iptv.filteredChannels, id: \.id) { channel in
+                                            let isChannelSelected = (iptv.selectedChannel?.streamId == channel.streamId && !channel.streamId.isEmpty) || (iptv.selectedChannel?.id == channel.id)
                                             ChannelGridCard(
                                                 channel: channel,
-                                                isSelected: iptv.selectedChannel?.id == channel.id,
+                                                isSelected: isChannelSelected,
                                                 isPlaying: isPlaying,
                                                 isFavorite: iptv.isFavorite(channel),
                                                 onSelect: {
@@ -1620,10 +1646,11 @@ struct ContentView: View {
                                 } else {
                                     // Vista Lista
                                     LazyVStack(spacing: 8) {
-                                        ForEach(iptv.filteredChannels) { channel in
+                                        ForEach(iptv.filteredChannels, id: \.id) { channel in
+                                            let isChannelSelected = (iptv.selectedChannel?.streamId == channel.streamId && !channel.streamId.isEmpty) || (iptv.selectedChannel?.id == channel.id)
                                             ChannelListRow(
                                                 channel: channel,
-                                                isSelected: iptv.selectedChannel?.id == channel.id,
+                                                isSelected: isChannelSelected,
                                                 isPlaying: isPlaying,
                                                 isFavorite: iptv.isFavorite(channel),
                                                 onSelect: {
