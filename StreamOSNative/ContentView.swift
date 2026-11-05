@@ -2,6 +2,29 @@ import SwiftUI
 import AVKit
 import Combine
 
+// MARK: - Color Palette & Theme (Navy Blue #111827, Yellow #FFC61A, White #FFFFFF, Card #1F2937)
+extension Color {
+    init(hex: UInt32, alpha: Double = 1.0) {
+        let r = Double((hex >> 16) & 0xFF) / 255.0
+        let g = Double((hex >> 8) & 0xFF) / 255.0
+        let b = Double(hex & 0xFF) / 255.0
+        self.init(.sRGB, red: r, green: g, blue: b, opacity: alpha)
+    }
+}
+
+enum Theme {
+    static let navyBg       = Color(hex: 0x111827) // Background principal #111827
+    static let cardBg       = Color(hex: 0x1F2937) // Superficies y tarjetas #1F2937
+    static let cardHover    = Color(hex: 0x283548) // Estado activo/hover
+    static let yellow       = Color(hex: 0xFFC61A) // Acento amarillo #FFC61A
+    static let yellowMuted  = Color(hex: 0xFFC61A).opacity(0.18)
+    static let textWhite    = Color(hex: 0xFFFFFF) // Texto principal blanco #FFFFFF
+    static let textMuted    = Color(hex: 0x9CA3AF) // Texto secundario #9CA3AF
+    static let border       = Color.white.opacity(0.08) // Borde sutil
+    static let borderYellow = Color(hex: 0xFFC61A).opacity(0.4)
+}
+
+// MARK: - Channel Model
 struct XtreamChannel: Identifiable, Equatable {
     let id: String
     let streamId: String
@@ -9,8 +32,17 @@ struct XtreamChannel: Identifiable, Equatable {
     let category: String
     let hlsUrl: String
     let tsUrl: String
+    let logoUrl: String?
 }
 
+// MARK: - Filter Tabs
+enum FilterTab: String, CaseIterable {
+    case all = "Todos"
+    case favorites = "Favoritos"
+    case recent = "Recientes"
+}
+
+// MARK: - Network Session
 class InsecureSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         if let trust = challenge.protectionSpace.serverTrust {
@@ -21,6 +53,7 @@ class InsecureSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskDeleg
     }
 }
 
+// MARK: - IPTV Manager (State, Data, Favorites & History)
 class IPTVManager: ObservableObject {
     @Published var channels: [XtreamChannel] = []
     @Published var filteredChannels: [XtreamChannel] = []
@@ -28,6 +61,7 @@ class IPTVManager: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var errorMessage: String? = nil
     @Published var statusMessage: String = "Listo"
+
     @Published var searchText: String = "" {
         didSet { filterChannels() }
     }
@@ -35,6 +69,29 @@ class IPTVManager: ObservableObject {
         didSet { filterChannels() }
     }
     @Published var categories: [String] = ["Todas"]
+
+    @Published var activeTab: FilterTab = .all {
+        didSet { filterChannels() }
+    }
+    @Published var isGridView: Bool = UserDefaults.standard.bool(forKey: "xc_grid_view") {
+        didSet { UserDefaults.standard.set(isGridView, forKey: "xc_grid_view") }
+    }
+
+    // Favoritos persistentes
+    @Published var favoriteIds: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "xc_favorites") ?? []) {
+        didSet {
+            UserDefaults.standard.set(Array(favoriteIds), forKey: "xc_favorites")
+            if activeTab == .favorites { filterChannels() }
+        }
+    }
+
+    // Historial reciente persistente
+    @Published var recentIds: [String] = UserDefaults.standard.stringArray(forKey: "xc_recents") ?? [] {
+        didSet {
+            UserDefaults.standard.set(recentIds, forKey: "xc_recents")
+            if activeTab == .recent { filterChannels() }
+        }
+    }
 
     @Published var serverUrl: String = UserDefaults.standard.string(forKey: "xc_server") ?? "http://veotv.info:8880" {
         didSet { UserDefaults.standard.set(serverUrl, forKey: "xc_server") }
@@ -53,7 +110,6 @@ class IPTVManager: ObservableObject {
         if (UserDefaults.standard.string(forKey: "xc_pass") ?? "").isEmpty {
             UserDefaults.standard.set("8kz1MRT1r2", forKey: "xc_pass")
         }
-        // Desactivar caché para forzar a descargar listas frescas sin congelarse
         URLCache.shared = URLCache(memoryCapacity: 0, diskCapacity: 0, diskPath: nil)
     }
 
@@ -64,6 +120,40 @@ class IPTVManager: ObservableObject {
         config.timeoutIntervalForResource = 60.0
         return URLSession(configuration: config, delegate: InsecureSessionDelegate(), delegateQueue: nil)
     }()
+
+    func isFavorite(_ channel: XtreamChannel) -> Bool {
+        favoriteIds.contains(channel.id)
+    }
+
+    func toggleFavorite(_ channel: XtreamChannel) {
+        if favoriteIds.contains(channel.id) {
+            favoriteIds.remove(channel.id)
+        } else {
+            favoriteIds.insert(channel.id)
+        }
+    }
+
+    func recordWatched(_ channel: XtreamChannel) {
+        var recents = recentIds.filter { $0 != channel.id }
+        recents.insert(channel.id, at: 0)
+        if recents.count > 60 { recents = Array(recents.prefix(60)) }
+        recentIds = recents
+    }
+
+    func clearRecents() {
+        recentIds.removeAll()
+    }
+
+    func clearFavorites() {
+        favoriteIds.removeAll()
+    }
+
+    func count(for category: String) -> Int {
+        if category == "Todas" {
+            return channels.count
+        }
+        return channels.filter { $0.category == category }.count
+    }
 
     func cleanServerUrl(_ url: String) -> String {
         var cleaned = url.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -136,7 +226,6 @@ class IPTVManager: ObservableObject {
                 return
             }
 
-            // Si el servidor devolvió un error HTTP (ej: 401, 403, 404, 500)
             if statusCode != 200 && statusCode != 0 {
                 DispatchQueue.main.async {
                     self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "Servidor respondió con código \(statusCode)")
@@ -144,7 +233,7 @@ class IPTVManager: ObservableObject {
                 return
             }
 
-            // Caso 1: Array JSON con canales de Xtream
+            // Caso 1: Array JSON Xtream
             if let rawArray = try? JSONSerialization.jsonObject(with: rawData) as? [[String: Any]], !rawArray.isEmpty {
                 var parsed: [XtreamChannel] = []
                 var catsSet = Set<String>()
@@ -166,6 +255,9 @@ class IPTVManager: ObservableObject {
                     }
                     catsSet.insert(cat)
 
+                    let iconUrl = (item["stream_icon"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let cleanIcon = (iconUrl?.isEmpty == false) ? iconUrl : nil
+
                     let hls = "\(base)/live/\(cleanUser)/\(cleanPass)/\(streamIdStr).m3u8"
                     let ts = "\(base)/\(cleanUser)/\(cleanPass)/\(streamIdStr)"
 
@@ -175,7 +267,8 @@ class IPTVManager: ObservableObject {
                         name: sName,
                         category: cat,
                         hlsUrl: hls,
-                        tsUrl: ts
+                        tsUrl: ts,
+                        logoUrl: cleanIcon
                     ))
                 }
 
@@ -185,7 +278,9 @@ class IPTVManager: ObservableObject {
                         self.channels = parsed
                         self.categories = ["Todas"] + Array(catsSet).sorted()
                         self.filterChannels()
-                        self.selectedChannel = parsed.first
+                        if self.selectedChannel == nil {
+                            self.selectedChannel = parsed.first
+                        }
                         self.statusMessage = "\(parsed.count) canales cargados"
                     } else {
                         self.fetchM3uFallback(base: base, user: cleanUser, pass: cleanPass, previousErr: "La lista de canales en el servidor está vacía")
@@ -194,7 +289,7 @@ class IPTVManager: ObservableObject {
                 return
             }
 
-            // Caso 2: Objeto JSON devuelto por Xtream con información de error o autenticación
+            // Caso 2: Objeto JSON informativo o de error
             if let dict = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
                 if let userInfo = dict["user_info"] as? [String: Any] {
                     let auth = userInfo["auth"] as? Int ?? 1
@@ -257,7 +352,7 @@ class IPTVManager: ObservableObject {
                 }
 
                 if statusCode == 404 {
-                    self.errorMessage = "Error 404: Servidor o credenciales no encontrados. Verifica Servidor, Usuario y Contraseña en Ajustes."
+                    self.errorMessage = "Error 404: Servidor o credenciales no encontrados. Verifica en Ajustes."
                     return
                 } else if statusCode == 401 || statusCode == 403 {
                     self.errorMessage = "Error \(statusCode): Usuario o contraseña denegados. Verifica en Ajustes."
@@ -272,7 +367,6 @@ class IPTVManager: ObservableObject {
                     return
                 }
 
-                // Exigir formato M3U real (debe contener #EXTM3U o #EXTINF), NO solo 'http'
                 if text.contains("#EXTM3U") || text.contains("#EXTINF:") {
                     self.parseM3UContent(text, base: base, user: user, pass: pass)
                 } else {
@@ -287,6 +381,7 @@ class IPTVManager: ObservableObject {
         var catsSet = Set<String>()
         var tempName = ""
         var tempCat = "General"
+        var tempLogo: String? = nil
 
         let lines = content.components(separatedBy: .newlines)
         for line in lines {
@@ -294,7 +389,7 @@ class IPTVManager: ObservableObject {
             if trimmed.isEmpty { continue }
 
             if trimmed.hasPrefix("#EXTINF:") {
-                // Extraer categoría (group-title)
+                // Categoría
                 if let groupRange = trimmed.range(of: "group-title=\"([^\"]+)\"", options: .regularExpression) {
                     let fullMatch = String(trimmed[groupRange])
                     tempCat = fullMatch.replacingOccurrences(of: "group-title=\"", with: "").replacingOccurrences(of: "\"", with: "").trimmingCharacters(in: .whitespaces)
@@ -303,7 +398,13 @@ class IPTVManager: ObservableObject {
                     tempCat = fullMatch.replacingOccurrences(of: "group-title='", with: "").replacingOccurrences(of: "'", with: "").trimmingCharacters(in: .whitespaces)
                 }
 
-                // Extraer nombre del canal
+                // Logo
+                if let logoRange = trimmed.range(of: "tvg-logo=\"([^\"]+)\"", options: .regularExpression) {
+                    let fullMatch = String(trimmed[logoRange])
+                    tempLogo = fullMatch.replacingOccurrences(of: "tvg-logo=\"", with: "").replacingOccurrences(of: "\"", with: "").trimmingCharacters(in: .whitespaces)
+                }
+
+                // Nombre
                 if let commaIdx = trimmed.lastIndex(of: ",") {
                     tempName = String(trimmed[trimmed.index(after: commaIdx)...]).trimmingCharacters(in: .whitespaces)
                 }
@@ -332,11 +433,13 @@ class IPTVManager: ObservableObject {
                     name: finalName,
                     category: finalCat,
                     hlsUrl: hls,
-                    tsUrl: ts
+                    tsUrl: ts,
+                    logoUrl: tempLogo
                 ))
                 catsSet.insert(finalCat)
                 tempName = ""
                 tempCat = "General"
+                tempLogo = nil
 
                 if parsed.count >= 2500 { break }
             }
@@ -346,7 +449,9 @@ class IPTVManager: ObservableObject {
             self.channels = parsed
             self.categories = ["Todas"] + Array(catsSet).sorted()
             self.filterChannels()
-            self.selectedChannel = parsed.first
+            if self.selectedChannel == nil {
+                self.selectedChannel = parsed.first
+            }
             self.statusMessage = "\(parsed.count) canales cargados"
         } else {
             self.errorMessage = "No se encontraron canales válidos en la lista M3U. Verifica tus datos en Ajustes."
@@ -355,17 +460,37 @@ class IPTVManager: ObservableObject {
 
     func filterChannels() {
         var result = channels
-        if selectedCategory != "Todas" {
-            result = result.filter { $0.category == selectedCategory }
+
+        // 1. Filtrar por pestaña activa (Todos, Favoritos o Recientes)
+        switch activeTab {
+        case .all:
+            if selectedCategory != "Todas" {
+                result = result.filter { $0.category == selectedCategory }
+            }
+        case .favorites:
+            result = result.filter { favoriteIds.contains($0.id) }
+        case .recent:
+            // Conservar el orden cronológico de recientes
+            var recentOrdered: [XtreamChannel] = []
+            let map = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
+            for rId in recentIds {
+                if let ch = map[rId] {
+                    recentOrdered.append(ch)
+                }
+            }
+            result = recentOrdered
         }
+
+        // 2. Filtrar por texto de búsqueda
         if !searchText.isEmpty {
             result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
         }
+
         self.filteredChannels = result
     }
 }
 
-// MARK: - VLC Player (MobileVLCKit) - Motor Profesional para MPEG-TS sin Cortes
+// MARK: - VLC Player (MobileVLCKit)
 #if canImport(MobileVLCKit)
 import MobileVLCKit
 
@@ -393,7 +518,6 @@ struct VLCPlayerView: UIViewRepresentable {
             }
 
             let media = VLCMedia(url: mediaUrl)
-            // Buffer y sincronización continua para streams en vivo MPEG-TS
             media.addOptions([
                 "network-caching": 2500,
                 ":network-caching": 2500,
@@ -464,7 +588,7 @@ struct VLCPlayerView: UIViewRepresentable {
 }
 #endif
 
-// MARK: - Native Player with Respected Pause & Smooth Continuous Playback
+// MARK: - Native Player (AVPlayer fallback)
 struct NativePlayerView: UIViewControllerRepresentable {
     let streamUrl: String
     @Binding var isPlaying: Bool
@@ -486,7 +610,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
             cleanObservers()
 
-            // 1. Manejador de microcortes de red: reanuda inmediatamente si el usuario no pausó
             stallObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemPlaybackStalled,
                 object: player.currentItem,
@@ -497,7 +620,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 p.playImmediately(atRate: 1.0)
             }
 
-            // 2. Si el reproductor alcanza el fin del buffer de fragmentos disponibles
             endObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: player.currentItem,
@@ -505,7 +627,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
             ) { [weak player] _ in
                 guard let p = player else { return }
                 if p.timeControlStatus == .paused || p.rate == 0 { return }
-                // Reanudación inmediata sin seek para no purgar el decodificador ni causar pantalla negra
                 p.playImmediately(atRate: 1.0)
             }
 
@@ -518,7 +639,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
             watchdogTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self, weak player] _ in
                 guard let self = self, let player = player else { return }
 
-                // REGLA FUNDAMENTAL: Si el usuario pausó la reproducción, se respeta al 100%
                 if player.timeControlStatus == .paused || player.rate == 0 {
                     self.stallSeconds = 0
                     return
@@ -530,12 +650,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
                 if isWaiting || isFrozen {
                     self.stallSeconds += 2.0
-
-                    // Nivel 1: A los 6 segundos de congelamiento, avance suave sin pantalla negra
                     if self.stallSeconds >= 6.0 && self.stallSeconds < 14.0 {
                         self.smoothRecoverLiveEdge(player: player)
                     } else if self.stallSeconds >= 14.0 {
-                        // Nivel 2: Solo si el stream estuvo muerto por más de 14s, reconexión de seguridad
                         self.stallSeconds = 0
                         self.hardReconnect(player: player)
                     }
@@ -548,7 +665,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         func smoothRecoverLiveEdge(player: AVPlayer) {
             guard player.timeControlStatus != .paused && player.rate != 0 else { return }
-            // Reanudación inmediata en el pipeline actual sin destruir la vista
             player.playImmediately(atRate: 1.0)
         }
 
@@ -613,7 +729,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        return Coordinator()
+        Coordinator()
     }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
@@ -625,7 +741,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        // Asegurar que use siempre formato HLS compatible con iOS
         var targetUrl = streamUrl
         if targetUrl.hasSuffix(".ts") {
             targetUrl = String(targetUrl.dropLast(3)) + ".m3u8"
@@ -633,8 +748,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         if context.coordinator.currentUrl != targetUrl {
             context.coordinator.currentUrl = targetUrl
-
-            // 1. Detener por completo el stream y observadores anteriores
             context.coordinator.stopWatchdog()
             context.coordinator.cleanObservers()
             context.coordinator.player?.pause()
@@ -642,7 +755,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
             guard let url = URL(string: targetUrl) else { return }
 
-            // 2. User-Agent a nivel de conexión y fragmentos:
             let userAgent = "IPTVSmartersPro/3.1.5"
             let options: [String: Any] = [
                 "AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": userAgent],
@@ -650,7 +762,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
             ]
             let asset = AVURLAsset(url: url, options: options)
             let item = AVPlayerItem(asset: asset)
-            // Buffer adelantado de 10s: absorbe microcortes y evita pausas entre fragmentos
             item.preferredForwardBufferDuration = 10.0
             item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
 
@@ -658,7 +769,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
             player.automaticallyWaitsToMinimizeStalling = true
 
             context.coordinator.setup(player: player, streamUrl: targetUrl)
-
             uiViewController.player = player
             if isPlaying {
                 player.play()
@@ -681,10 +791,359 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - Main User Interface
+// MARK: - Slide-out Categories Drawer
+struct CategoriesDrawerView: View {
+    @ObservedObject var iptv: IPTVManager
+    @Binding var isPresented: Bool
+    @State private var categoryFilter: String = ""
+
+    var filteredCategories: [String] {
+        if categoryFilter.isEmpty {
+            return iptv.categories
+        }
+        return iptv.categories.filter { $0.localizedCaseInsensitiveContains(categoryFilter) }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header del Drawer
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text("STREAM")
+                                .font(.system(size: 18, weight: .black))
+                                .foregroundColor(Theme.textWhite)
+                            Text("OS")
+                                .font(.system(size: 18, weight: .black))
+                                .foregroundColor(Theme.yellow)
+                        }
+                        Text("iptv player")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Theme.textMuted)
+                    }
+
+                    Spacer()
+
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            isPresented = false
+                        }
+                    }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(Theme.textWhite)
+                            .frame(width: 32, height: 32)
+                            .background(Theme.cardBg)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 54)
+                .padding(.bottom, 16)
+
+                // Título de sección y buscador interno
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Categorías")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(Theme.textWhite)
+                        Spacer()
+                        Text("\(iptv.categories.count)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Theme.yellow)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Theme.yellowMuted)
+                            .cornerRadius(10)
+                    }
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(Theme.textMuted)
+                        TextField("Buscar categoría...", text: $categoryFilter)
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.textWhite)
+                        if !categoryFilter.isEmpty {
+                            Button(action: { categoryFilter = "" }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.textMuted)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Theme.cardBg)
+                    .cornerRadius(10)
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+
+                Divider()
+                    .background(Theme.border)
+
+                // Lista de Categorías
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(filteredCategories, id: \.self) { cat in
+                            let isSelected = (iptv.selectedCategory == cat && iptv.activeTab == .all)
+                            let count = iptv.count(for: cat)
+
+                            Button(action: {
+                                iptv.activeTab = .all
+                                iptv.selectedCategory = cat
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    isPresented = false
+                                }
+                            }) {
+                                HStack(spacing: 12) {
+                                    // Barra indicadora izquierda amarilla
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .fill(isSelected ? Theme.yellow : Color.clear)
+                                        .frame(width: 4, height: 26)
+
+                                    Text(cat)
+                                        .font(.system(size: 14, weight: isSelected ? .bold : .medium))
+                                        .foregroundColor(isSelected ? Theme.yellow : Theme.textWhite)
+                                        .lineLimit(1)
+
+                                    Spacer()
+
+                                    Text("\(count)")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(isSelected ? Theme.yellow : Theme.textMuted)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(isSelected ? Theme.yellowMuted : Theme.cardBg)
+                                        .cornerRadius(8)
+                                }
+                                .padding(.trailing, 16)
+                                .padding(.vertical, 8)
+                                .background(isSelected ? Theme.yellowMuted.opacity(0.35) : Color.clear)
+                                .cornerRadius(8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+                }
+
+                Spacer()
+            }
+            .frame(width: 290)
+            .background(Theme.navyBg)
+            .overlay(
+                Rectangle()
+                    .fill(Theme.border)
+                    .frame(width: 1),
+                alignment: .trailing
+            )
+
+            // Fondo semitransparente que descarta al tocar
+            Color.black.opacity(0.6)
+                .edgesIgnoringSafeArea(.all)
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isPresented = false
+                    }
+                }
+        }
+        .edgesIgnoringSafeArea(.vertical)
+    }
+}
+
+// MARK: - Channel Card (List View)
+struct ChannelListRow: View {
+    let channel: XtreamChannel
+    let isSelected: Bool
+    let isPlaying: Bool
+    let isFavorite: Bool
+    let onSelect: () -> Void
+    let onToggleFavorite: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                // Icono / Logo del canal
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(isSelected ? Theme.yellowMuted : Theme.cardBg)
+                        .frame(width: 44, height: 44)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(isSelected ? Theme.yellow : Theme.border, lineWidth: 1)
+                        )
+
+                    if let logo = channel.logoUrl, let url = URL(string: logo) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image.resizable()
+                                    .scaledToFit()
+                                    .frame(width: 32, height: 32)
+                            default:
+                                fallbackChannelIcon
+                            }
+                        }
+                    } else {
+                        fallbackChannelIcon
+                    }
+                }
+
+                // Nombre y Categoría
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(channel.name)
+                        .font(.system(size: 14, weight: isSelected ? .bold : .semibold))
+                        .foregroundColor(isSelected ? Theme.yellow : Theme.textWhite)
+                        .lineLimit(1)
+
+                    HStack(spacing: 4) {
+                        Text("Categoría:")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundColor(Theme.textMuted)
+                        Text(channel.category)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Theme.textMuted.opacity(0.9))
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                // Indicador de reproducción activa
+                if isSelected {
+                    Image(systemName: isPlaying ? "speaker.wave.3.fill" : "speaker.slash.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(Theme.yellow)
+                        .padding(.trailing, 4)
+                }
+
+                // Botón de Favorito
+                Button(action: onToggleFavorite) {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .font(.system(size: 16))
+                        .foregroundColor(isFavorite ? Theme.yellow : Theme.textMuted.opacity(0.6))
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(BorderlessButtonStyle())
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(isSelected ? Theme.cardHover : Theme.cardBg)
+            .cornerRadius(14)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isSelected ? Theme.borderYellow : Theme.border, lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    private var fallbackChannelIcon: some View {
+        Image(systemName: "tv")
+            .font(.system(size: 18))
+            .foregroundColor(isSelected ? Theme.yellow : Theme.textWhite.opacity(0.7))
+    }
+}
+
+// MARK: - Channel Card (Grid View)
+struct ChannelGridCard: View {
+    let channel: XtreamChannel
+    let isSelected: Bool
+    let isPlaying: Bool
+    let isFavorite: Bool
+    let onSelect: () -> Void
+    let onToggleFavorite: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 8) {
+                // Header de la tarjeta con Logo y Estrella
+                HStack(alignment: .top) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(isSelected ? Theme.yellowMuted : Theme.navyBg)
+                            .frame(width: 38, height: 38)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(isSelected ? Theme.yellow : Theme.border, lineWidth: 1)
+                            )
+
+                        if let logo = channel.logoUrl, let url = URL(string: logo) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable()
+                                        .scaledToFit()
+                                        .frame(width: 28, height: 28)
+                                default:
+                                    Image(systemName: "tv")
+                                        .font(.system(size: 15))
+                                        .foregroundColor(isSelected ? Theme.yellow : Theme.textWhite.opacity(0.7))
+                                }
+                            }
+                        } else {
+                            Image(systemName: "tv")
+                                .font(.system(size: 15))
+                                .foregroundColor(isSelected ? Theme.yellow : Theme.textWhite.opacity(0.7))
+                        }
+                    }
+
+                    Spacer()
+
+                    Button(action: onToggleFavorite) {
+                        Image(systemName: isFavorite ? "star.fill" : "star")
+                            .font(.system(size: 15))
+                            .foregroundColor(isFavorite ? Theme.yellow : Theme.textMuted.opacity(0.6))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                }
+
+                // Nombre y Categoría
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(channel.name)
+                        .font(.system(size: 13, weight: isSelected ? .bold : .semibold))
+                        .foregroundColor(isSelected ? Theme.yellow : Theme.textWhite)
+                        .lineLimit(2)
+                        .frame(height: 34, alignment: .topLeading)
+
+                    HStack {
+                        Text(channel.category)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(Theme.textMuted)
+                            .lineLimit(1)
+                        Spacer()
+                        if isSelected {
+                            Image(systemName: isPlaying ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(Theme.yellow)
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background(isSelected ? Theme.cardHover : Theme.cardBg)
+            .cornerRadius(14)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isSelected ? Theme.borderYellow : Theme.border, lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - Main User Interface (Minimalist & Organized)
 struct ContentView: View {
     @StateObject private var iptv = IPTVManager()
     @State private var showSettings = false
+    @State private var showDrawer = false
+    @State private var showSearch = false
     @State private var isPlaying: Bool = true
     @State private var isFullScreen: Bool = false
     @State private var showControls: Bool = true
@@ -692,7 +1151,6 @@ struct ContentView: View {
 
     func resetControlsTimer() {
         controlsTimer?.invalidate()
-        // Si la reproducción está en pausa, mantenemos los controles visibles para que el usuario pueda pulsar Play
         guard isPlaying else { return }
         controlsTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { _ in
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -719,14 +1177,114 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationView {
+        ZStack(alignment: .leading) {
+            Theme.navyBg
+                .edgesIgnoringSafeArea(.all)
+
             VStack(spacing: 0) {
-                
-                // Contenedor del Reproductor de Video
+                // 1. Barra de Navegación Superior Minimalista
+                if !isFullScreen {
+                    HStack(spacing: 12) {
+                        // Botón Hamburguesa / Drawer
+                        Button(action: {
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                showDrawer.toggle()
+                            }
+                        }) {
+                            Image(systemName: "line.3.horizontal")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(Theme.textWhite)
+                                .frame(width: 38, height: 38)
+                                .background(Theme.cardBg)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+                        }
+
+                        // Logo de StreamOS
+                        HStack(spacing: 3) {
+                            Text("STREAM")
+                                .font(.system(size: 18, weight: .black))
+                                .foregroundColor(Theme.textWhite)
+                            Text("OS")
+                                .font(.system(size: 18, weight: .black))
+                                .foregroundColor(Theme.yellow)
+                        }
+
+                        Spacer()
+
+                        // Botón de Buscar
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showSearch.toggle()
+                                if !showSearch {
+                                    iptv.searchText = ""
+                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                }
+                            }
+                        }) {
+                            Image(systemName: showSearch ? "xmark" : "magnifyingglass")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundColor(showSearch ? Theme.yellow : Theme.textWhite)
+                                .frame(width: 38, height: 38)
+                                .background(Theme.cardBg)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(showSearch ? Theme.borderYellow : Theme.border, lineWidth: 1))
+                        }
+
+                        // Botón de Ajustes
+                        Button(action: {
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                            showSettings = true
+                        }) {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundColor(Theme.textWhite)
+                                .frame(width: 38, height: 38)
+                                .background(Theme.cardBg)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 6)
+                    .background(Theme.navyBg)
+
+                    // Campo de búsqueda colapsable
+                    if showSearch {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 14))
+                                .foregroundColor(Theme.yellow)
+                            TextField("Buscar canal por nombre...", text: $iptv.searchText)
+                                .font(.system(size: 14))
+                                .foregroundColor(Theme.textWhite)
+                            if !iptv.searchText.isEmpty {
+                                Button(action: {
+                                    iptv.searchText = ""
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(Theme.textMuted)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.cardBg)
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.borderYellow, lineWidth: 1))
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+
+                // 2. Contenedor del Reproductor de Video
                 ZStack {
                     if let selected = iptv.selectedChannel {
                         #if canImport(MobileVLCKit)
-                        // Con MobileVLCKit transmitimos directo el flujo MPEG-TS sin cortes
                         VLCPlayerView(streamUrl: selected.tsUrl, isPlaying: $isPlaying)
                             .background(Color.black)
                         #else
@@ -734,7 +1292,7 @@ struct ContentView: View {
                             .background(Color.black)
                         #endif
 
-                        // Superficie transparente activa que cubre el 100% del reproductor para detectar toques
+                        // Superficie transparente activa para detectar toques
                         Color.black.opacity(showControls ? 0.45 : 0.001)
                             .edgesIgnoringSafeArea(.all)
                             .contentShape(Rectangle())
@@ -742,7 +1300,7 @@ struct ContentView: View {
                                 toggleControls()
                             }
 
-                        // Capa de Controles del Reproductor (Overlay)
+                        // Capa de Controles Overlay
                         if showControls {
                             VStack(spacing: 0) {
                                 // Barra superior del reproductor
@@ -750,24 +1308,25 @@ struct ContentView: View {
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(selected.name)
                                             .font(.system(size: isFullScreen ? 18 : 15, weight: .bold))
-                                            .foregroundColor(.white)
+                                            .foregroundColor(Theme.textWhite)
                                             .lineLimit(1)
-                                            .shadow(color: .black.opacity(0.85), radius: 3)
+                                            .shadow(color: .black.opacity(0.9), radius: 4)
+
                                         HStack(spacing: 6) {
                                             Circle()
-                                                .fill(isPlaying ? Color.red : Color.orange)
+                                                .fill(isPlaying ? Theme.yellow : Color.orange)
                                                 .frame(width: 7, height: 7)
                                             Text(isPlaying ? "EN VIVO" : "PAUSADO")
-                                                .font(.caption2.bold())
-                                                .foregroundColor(.white)
+                                                .font(.system(size: 10, weight: .black))
+                                                .foregroundColor(isPlaying ? Theme.yellow : Color.orange)
                                             Text("•")
                                                 .font(.caption2)
-                                                .foregroundColor(.white.opacity(0.6))
+                                                .foregroundColor(Theme.textMuted)
                                             Text(selected.category)
-                                                .font(.caption2)
-                                                .foregroundColor(.white.opacity(0.85))
+                                                .font(.system(size: 11, weight: .medium))
+                                                .foregroundColor(Theme.textWhite.opacity(0.85))
                                         }
-                                        .shadow(color: .black.opacity(0.85), radius: 3)
+                                        .shadow(color: .black.opacity(0.9), radius: 4)
                                     }
 
                                     Spacer()
@@ -777,11 +1336,12 @@ struct ContentView: View {
                                         toggleFullScreen()
                                     }) {
                                         Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                                            .font(.system(size: 16, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .frame(width: 38, height: 38)
-                                            .background(Color.black.opacity(0.65))
+                                            .font(.system(size: 14, weight: .bold))
+                                            .foregroundColor(Theme.textWhite)
+                                            .frame(width: 36, height: 36)
+                                            .background(Color.black.opacity(0.75))
                                             .clipShape(Circle())
+                                            .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
                                     }
                                 }
                                 .padding(.horizontal, 16)
@@ -797,16 +1357,16 @@ struct ContentView: View {
                                         resetControlsTimer()
                                     }) {
                                         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                            .font(.system(size: isFullScreen ? 42 : 34, weight: .bold))
-                                            .foregroundColor(.white)
-                                            .frame(width: isFullScreen ? 82 : 68, height: isFullScreen ? 82 : 68)
-                                            .background(Color.black.opacity(0.65))
+                                            .font(.system(size: isFullScreen ? 38 : 30, weight: .bold))
+                                            .foregroundColor(Theme.yellow)
+                                            .frame(width: isFullScreen ? 78 : 64, height: isFullScreen ? 78 : 64)
+                                            .background(Color.black.opacity(0.75))
                                             .clipShape(Circle())
                                             .overlay(
                                                 Circle()
-                                                    .stroke(Color.white.opacity(0.35), lineWidth: 1.5)
+                                                    .stroke(Theme.yellow, lineWidth: 2)
                                             )
-                                            .shadow(color: .black.opacity(0.6), radius: 8)
+                                            .shadow(color: Theme.yellow.opacity(0.3), radius: 10)
                                     }
                                     Spacer()
                                 }
@@ -828,15 +1388,16 @@ struct ContentView: View {
                                     }) {
                                         HStack(spacing: 5) {
                                             Image(systemName: "arrow.clockwise")
-                                                .font(.caption2.bold())
+                                                .font(.system(size: 11, weight: .bold))
                                             Text("Sincronizar En Vivo")
-                                                .font(.caption2.bold())
+                                                .font(.system(size: 11, weight: .bold))
                                         }
-                                        .foregroundColor(.white)
+                                        .foregroundColor(Theme.textWhite)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 6)
-                                        .background(Color.black.opacity(0.65))
+                                        .background(Color.black.opacity(0.75))
                                         .cornerRadius(12)
+                                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
                                     }
 
                                     Spacer()
@@ -847,15 +1408,16 @@ struct ContentView: View {
                                     }) {
                                         HStack(spacing: 5) {
                                             Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "viewfinder")
-                                                .font(.caption.bold())
+                                                .font(.system(size: 11, weight: .bold))
                                             Text(isFullScreen ? "Salir" : "Pantalla Completa")
-                                                .font(.caption2.bold())
+                                                .font(.system(size: 11, weight: .bold))
                                         }
-                                        .foregroundColor(.white)
+                                        .foregroundColor(Theme.textWhite)
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 6)
-                                        .background(Color.black.opacity(0.65))
+                                        .background(Color.black.opacity(0.75))
                                         .cornerRadius(12)
+                                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
                                     }
                                 }
                                 .padding(.horizontal, 16)
@@ -867,17 +1429,20 @@ struct ContentView: View {
                         Rectangle()
                             .fill(Color.black)
                             .overlay(
-                                VStack(spacing: 6) {
+                                VStack(spacing: 8) {
                                     if iptv.isLoading {
                                         ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .progressViewStyle(CircularProgressViewStyle(tint: Theme.yellow))
                                         Text(iptv.statusMessage)
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(Theme.textMuted)
                                     } else {
-                                        Text("Selecciona un canal")
-                                            .font(.subheadline)
-                                            .foregroundColor(.gray)
+                                        Image(systemName: "play.tv")
+                                            .font(.system(size: 32))
+                                            .foregroundColor(Theme.textMuted)
+                                        Text("Selecciona un canal para comenzar")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(Theme.textMuted)
                                     }
                                 }
                             )
@@ -888,181 +1453,257 @@ struct ContentView: View {
                 .frame(maxHeight: isFullScreen ? .infinity : nil)
                 .background(Color.black)
 
+                // 3. Contenido en Modo Vertical (Now Playing Bar, Categorías y Lista)
                 if !isFullScreen {
-                    // Barra de información y controles rápidos debajo del reproductor
+                    // Barra Now Playing directa y limpia
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(iptv.selectedChannel?.name ?? "StreamOS")
-                                .font(.headline)
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundColor(Theme.textWhite)
                                 .lineLimit(1)
                             Text(iptv.selectedChannel?.category ?? "En vivo")
-                                .font(.caption2)
-                                .foregroundColor(.gray)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.textMuted)
                         }
 
                         Spacer()
 
-                        // Botón directo de Play / Pausa debajo del video
+                        // Botón de Play / Pausa tipo píldora (Amarillo #FFC61A con texto #111827)
                         Button(action: {
                             isPlaying.toggle()
                             resetControlsTimer()
                         }) {
-                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 30))
-                                .foregroundColor(isPlaying ? .red : .primary)
+                            HStack(spacing: 6) {
+                                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 12, weight: .black))
+                                Text(isPlaying ? "Pausa" : "Play")
+                                    .font(.system(size: 12, weight: .black))
+                            }
+                            .foregroundColor(Theme.navyBg)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Theme.yellow)
+                            .cornerRadius(20)
+                            .shadow(color: Theme.yellow.opacity(0.3), radius: 6)
                         }
 
-                        // Botón directo de Pantalla Completa debajo del video
+                        // Botón de Favorito rápido para el canal actual
+                        if let current = iptv.selectedChannel {
+                            Button(action: {
+                                iptv.toggleFavorite(current)
+                            }) {
+                                Image(systemName: iptv.isFavorite(current) ? "star.fill" : "star")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundColor(iptv.isFavorite(current) ? Theme.yellow : Theme.textWhite)
+                                    .frame(width: 34, height: 34)
+                                    .background(Theme.cardBg)
+                                    .clipShape(Circle())
+                                    .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+                            }
+                        }
+
+                        // Botón directo de Pantalla Completa
                         Button(action: {
                             toggleFullScreen()
                         }) {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                .font(.system(size: 16, weight: .semibold))
-                                .padding(8)
-                                .background(Color(.secondarySystemBackground))
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(Theme.textWhite)
+                                .frame(width: 34, height: 34)
+                                .background(Theme.cardBg)
                                 .clipShape(Circle())
-                        }
-
-                        // Botón de re-sincronizar EN VIVO
-                        Button(action: {
-                            if let current = iptv.selectedChannel {
-                                iptv.selectedChannel = nil
-                                isPlaying = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    iptv.selectedChannel = current
-                                }
-                            }
-                        }) {
-                            HStack(spacing: 4) {
-                                Circle()
-                                    .fill(isPlaying ? Color.red : Color.gray)
-                                    .frame(width: 7, height: 7)
-                                Text("EN VIVO")
-                                    .font(.caption2.bold())
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color.red.opacity(0.18))
-                            .foregroundColor(.red)
-                            .cornerRadius(8)
-                        }
-
-                        Button(action: { iptv.fetchChannels() }) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.subheadline)
-                                .padding(8)
-                                .background(Color(.secondarySystemBackground))
-                                .clipShape(Circle())
+                                .overlay(Circle().stroke(Theme.border, lineWidth: 1))
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemBackground))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Theme.cardBg)
+                    .overlay(
+                        Rectangle()
+                            .fill(Theme.border)
+                            .frame(height: 1),
+                        alignment: .bottom
+                    )
 
-                    // Selector de categorías
+                    // Carrusel horizontal de Categorías Rápidas
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(iptv.categories, id: \.self) { cat in
+                                let isSelected = (iptv.selectedCategory == cat && iptv.activeTab == .all)
                                 Button(action: {
                                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                    iptv.activeTab = .all
                                     iptv.selectedCategory = cat
                                 }) {
                                     Text(cat)
-                                        .font(.caption.bold())
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(iptv.selectedCategory == cat ? Color.red : Color(.secondarySystemBackground))
-                                        .foregroundColor(iptv.selectedCategory == cat ? .white : .primary)
-                                        .cornerRadius(16)
+                                        .font(.system(size: 12, weight: isSelected ? .bold : .medium))
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 7)
+                                        .background(isSelected ? Theme.yellow : Theme.cardBg)
+                                        .foregroundColor(isSelected ? Theme.navyBg : Theme.textWhite)
+                                        .cornerRadius(18)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 18)
+                                                .stroke(isSelected ? Theme.yellow : Theme.border, lineWidth: 1)
+                                        )
                                 }
                             }
                         }
-                        .padding(.horizontal)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                     }
 
-                    // Campo de búsqueda con descarte de teclado
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.gray)
-                        TextField("Buscar canal...", text: $iptv.searchText)
-                            .font(.subheadline)
-                        if !iptv.searchText.isEmpty {
-                            Button(action: {
-                                iptv.searchText = ""
-                                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                            }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                    }
-                    .padding(8)
-                    .background(Color(.secondarySystemBackground))
-                    .cornerRadius(10)
-                    .padding(.horizontal)
-                    .padding(.vertical, 4)
+                    // Contenido Principal: Lista / Cuadrícula de Canales + Píldora Flotante Inferior
+                    ZStack(alignment: .bottom) {
+                        if let err = iptv.errorMessage {
+                            VStack(spacing: 14) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(Theme.yellow)
+                                    .font(.system(size: 40))
+                                Text(err)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .multilineTextAlignment(.center)
+                                    .foregroundColor(Theme.textMuted)
+                                    .padding(.horizontal, 24)
 
-                    // Lista de canales
-                    if let err = iptv.errorMessage {
-                        VStack(spacing: 12) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.yellow)
-                                .font(.largeTitle)
-                            Text(err)
-                                .font(.subheadline)
-                                .multilineTextAlignment(.center)
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal)
-                            Button("Abrir Ajustes") {
-                                showSettings = true
-                            }
-                            .font(.caption.bold())
-                            .foregroundColor(.red)
-                        }
-                        .frame(maxHeight: .infinity)
-                    } else {
-                        List(iptv.filteredChannels) { channel in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(channel.name)
-                                        .font(.subheadline)
-                                        .foregroundColor(iptv.selectedChannel?.id == channel.id ? .red : .primary)
-                                        .lineLimit(1)
-                                    Text(channel.category)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                if iptv.selectedChannel?.id == channel.id {
-                                    Image(systemName: isPlaying ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.red)
+                                Button(action: { showSettings = true }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "gearshape")
+                                        Text("Configurar en Ajustes")
+                                    }
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(Theme.navyBg)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 9)
+                                    .background(Theme.yellow)
+                                    .cornerRadius(20)
                                 }
                             }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                                isPlaying = true
-                                iptv.selectedChannel = channel
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if iptv.filteredChannels.isEmpty && !iptv.isLoading {
+                            VStack(spacing: 10) {
+                                Image(systemName: iptv.activeTab == .favorites ? "star" : "magnifyingglass")
+                                    .font(.system(size: 36))
+                                    .foregroundColor(Theme.textMuted.opacity(0.6))
+                                Text(iptv.activeTab == .favorites ? "No tienes canales favoritos aún" : (iptv.activeTab == .recent ? "Sin canales recientes" : "No se encontraron canales"))
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(Theme.textMuted)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            ScrollView(showsIndicators: false) {
+                                if iptv.isGridView {
+                                    // Vista Cuadrícula
+                                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                                        ForEach(iptv.filteredChannels) { channel in
+                                            ChannelGridCard(
+                                                channel: channel,
+                                                isSelected: iptv.selectedChannel?.id == channel.id,
+                                                isPlaying: isPlaying,
+                                                isFavorite: iptv.isFavorite(channel),
+                                                onSelect: {
+                                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                                    isPlaying = true
+                                                    iptv.selectedChannel = channel
+                                                    iptv.recordWatched(channel)
+                                                },
+                                                onToggleFavorite: {
+                                                    iptv.toggleFavorite(channel)
+                                                }
+                                            )
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 8)
+                                    .padding(.bottom, 74) // Espacio para la barra flotante
+                                } else {
+                                    // Vista Lista
+                                    LazyVStack(spacing: 8) {
+                                        ForEach(iptv.filteredChannels) { channel in
+                                            ChannelListRow(
+                                                channel: channel,
+                                                isSelected: iptv.selectedChannel?.id == channel.id,
+                                                isPlaying: isPlaying,
+                                                isFavorite: iptv.isFavorite(channel),
+                                                onSelect: {
+                                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                                    isPlaying = true
+                                                    iptv.selectedChannel = channel
+                                                    iptv.recordWatched(channel)
+                                                },
+                                                onToggleFavorite: {
+                                                    iptv.toggleFavorite(channel)
+                                                }
+                                            )
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 8)
+                                    .padding(.bottom, 74) // Espacio para la barra flotante
+                                }
                             }
                         }
-                        .listStyle(PlainListStyle())
+
+                        // 4. Barra Flotante Inferior de Pestañas (Píldora flotante minimalista)
+                        HStack(spacing: 4) {
+                            ForEach(FilterTab.allCases, id: \.self) { tab in
+                                let isTabActive = (iptv.activeTab == tab)
+                                let badgeCount: Int? = {
+                                    if tab == .favorites { return iptv.favoriteIds.count }
+                                    if tab == .recent { return iptv.recentIds.count }
+                                    return nil
+                                }()
+
+                                Button(action: {
+                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        iptv.activeTab = tab
+                                    }
+                                }) {
+                                    HStack(spacing: 5) {
+                                        Text(tab.rawValue)
+                                            .font(.system(size: 13, weight: isTabActive ? .bold : .medium))
+
+                                        if let count = badgeCount, count > 0 {
+                                            Text("\(count)")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1)
+                                                .background(isTabActive ? Theme.navyBg.opacity(0.2) : Theme.yellowMuted)
+                                                .cornerRadius(8)
+                                        }
+                                    }
+                                    .foregroundColor(isTabActive ? Theme.navyBg : Theme.textWhite)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 9)
+                                    .background(isTabActive ? Theme.yellow : Color.clear)
+                                    .cornerRadius(20)
+                                }
+                            }
+                        }
+                        .padding(4)
+                        .background(Theme.cardBg)
+                        .cornerRadius(24)
+                        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Theme.border, lineWidth: 1))
+                        .shadow(color: Color.black.opacity(0.4), radius: 10, y: 4)
+                        .padding(.bottom, 12)
                     }
                 }
             }
             .edgesIgnoringSafeArea(isFullScreen ? .all : [])
-            .navigationBarTitle(isFullScreen ? "" : "StreamOS", displayMode: .inline)
-            .navigationBarHidden(isFullScreen)
-            .statusBar(hidden: isFullScreen)
-            .navigationBarItems(trailing: Button(action: { showSettings = true }) {
-                Image(systemName: "gear")
-            })
-            .sheet(isPresented: $showSettings) {
-                SettingsView(iptv: iptv)
+
+            // 5. Drawer Lateral de Categorías
+            if showDrawer {
+                CategoriesDrawerView(iptv: iptv, isPresented: $showDrawer)
+                    .transition(.move(edge: .leading))
+                    .zIndex(100)
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .statusBar(hidden: isFullScreen)
+        .sheet(isPresented: $showSettings) {
+            SettingsView(iptv: iptv)
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             let orientation = UIDevice.current.orientation
             if orientation.isLandscape && !isFullScreen {
@@ -1088,66 +1729,292 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Settings Screen
+// MARK: - Settings Screen (Dark Navy #111827 & Yellow #FFC61A Minimalist Design)
 struct SettingsView: View {
     @ObservedObject var iptv: IPTVManager
     @Environment(\.presentationMode) var presentationMode
     @State private var isPasswordVisible: Bool = false
+    @State private var showConfirmClearRecents: Bool = false
+    @State private var showConfirmClearFavorites: Bool = false
 
     var body: some View {
         NavigationView {
-            Form {
-                Section(
-                    header: Text("Servidor Xtream"),
-                    footer: Text("Asegúrate de incluir el protocolo (http://) y el puerto (:8880 u otro) si tu proveedor lo requiere.")
-                ) {
-                    TextField("Servidor (ej: http://veotv.info:8880)", text: $iptv.serverUrl)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                        .keyboardType(.URL)
+            ZStack {
+                Theme.navyBg
+                    .edgesIgnoringSafeArea(.all)
 
-                    TextField("Usuario", text: $iptv.username)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 20) {
 
-                    HStack {
-                        if isPasswordVisible {
-                            TextField("Contraseña", text: $iptv.password)
-                                .autocapitalization(.none)
-                                .disableAutocorrection(true)
-                        } else {
-                            SecureField("Contraseña", text: $iptv.password)
-                                .autocapitalization(.none)
-                                .disableAutocorrection(true)
+                        // Sección: Modo de Vista (Lista vs Cuadrícula)
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("VISTA DE CANALES")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(Theme.textMuted)
+                                .padding(.horizontal, 4)
+
+                            HStack(spacing: 12) {
+                                Button(action: { iptv.isGridView = false }) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "list.bullet")
+                                            .font(.system(size: 14, weight: .bold))
+                                        Text("Lista")
+                                            .font(.system(size: 13, weight: .bold))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(!iptv.isGridView ? Theme.yellow : Theme.cardBg)
+                                    .foregroundColor(!iptv.isGridView ? Theme.navyBg : Theme.textWhite)
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(!iptv.isGridView ? Theme.yellow : Theme.border, lineWidth: 1)
+                                    )
+                                }
+
+                                Button(action: { iptv.isGridView = true }) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "square.grid.2x2")
+                                            .font(.system(size: 14, weight: .bold))
+                                        Text("Cuadrícula")
+                                            .font(.system(size: 13, weight: .bold))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(iptv.isGridView ? Theme.yellow : Theme.cardBg)
+                                    .foregroundColor(iptv.isGridView ? Theme.navyBg : Theme.textWhite)
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(iptv.isGridView ? Theme.yellow : Theme.border, lineWidth: 1)
+                                    )
+                                }
+                            }
                         }
 
-                        Button(action: { isPasswordVisible.toggle() }) {
-                            Image(systemName: isPasswordVisible ? "eye.slash.fill" : "eye.fill")
-                                .foregroundColor(.gray)
+                        // Sección: Perfil Actual
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("PERFIL ACTUAL")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(Theme.textMuted)
+                                .padding(.horizontal, 4)
+
+                            VStack(spacing: 14) {
+                                HStack(spacing: 14) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Theme.yellowMuted)
+                                            .frame(width: 48, height: 48)
+                                        Image(systemName: "person.crop.circle.fill")
+                                            .font(.system(size: 28))
+                                            .foregroundColor(Theme.yellow)
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(iptv.username.isEmpty ? "Usuario IPTV" : iptv.username)
+                                            .font(.system(size: 15, weight: .bold))
+                                            .foregroundColor(Theme.textWhite)
+                                        Text(iptv.cleanServerUrl(iptv.serverUrl))
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(Theme.textMuted)
+                                            .lineLimit(1)
+                                    }
+
+                                    Spacer()
+
+                                    Text("ACTIVO")
+                                        .font(.system(size: 10, weight: .black))
+                                        .foregroundColor(Theme.navyBg)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Theme.yellow)
+                                        .cornerRadius(8)
+                                }
+
+                                Divider()
+                                    .background(Theme.border)
+
+                                HStack(spacing: 12) {
+                                    Button(action: { showConfirmClearRecents = true }) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "clock.arrow.circlepath")
+                                                .font(.system(size: 12))
+                                            Text("Borrar Recientes")
+                                                .font(.system(size: 12, weight: .medium))
+                                        }
+                                        .foregroundColor(Theme.textMuted)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .background(Theme.navyBg)
+                                        .cornerRadius(8)
+                                    }
+
+                                    Button(action: { showConfirmClearFavorites = true }) {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "star.slash")
+                                                .font(.system(size: 12))
+                                            Text("Borrar Favoritos")
+                                                .font(.system(size: 12, weight: .medium))
+                                        }
+                                        .foregroundColor(Theme.textMuted)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .background(Theme.navyBg)
+                                        .cornerRadius(8)
+                                    }
+                                }
+                            }
+                            .padding(16)
+                            .background(Theme.cardBg)
+                            .cornerRadius(16)
+                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.border, lineWidth: 1))
                         }
-                        .buttonStyle(BorderlessButtonStyle())
+
+                        // Sección: Credenciales del Servidor
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("CONFIGURACIÓN DE SERVIDOR")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(Theme.textMuted)
+                                .padding(.horizontal, 4)
+
+                            VStack(spacing: 12) {
+                                // Campo Servidor
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("URL del Servidor")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(Theme.textMuted)
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "link")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(Theme.yellow)
+                                        TextField("http://servidor:puerto", text: $iptv.serverUrl)
+                                            .font(.system(size: 14))
+                                            .foregroundColor(Theme.textWhite)
+                                            .autocapitalization(.none)
+                                            .disableAutocorrection(true)
+                                            .keyboardType(.URL)
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .background(Theme.navyBg)
+                                    .cornerRadius(12)
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+                                }
+
+                                // Campo Usuario
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Usuario")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(Theme.textMuted)
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "person.fill")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(Theme.yellow)
+                                        TextField("Tu usuario", text: $iptv.username)
+                                            .font(.system(size: 14))
+                                            .foregroundColor(Theme.textWhite)
+                                            .autocapitalization(.none)
+                                            .disableAutocorrection(true)
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .background(Theme.navyBg)
+                                    .cornerRadius(12)
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+                                }
+
+                                // Campo Contraseña
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Contraseña")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(Theme.textMuted)
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "lock.fill")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(Theme.yellow)
+                                        if isPasswordVisible {
+                                            TextField("Tu contraseña", text: $iptv.password)
+                                                .font(.system(size: 14))
+                                                .foregroundColor(Theme.textWhite)
+                                                .autocapitalization(.none)
+                                                .disableAutocorrection(true)
+                                        } else {
+                                            SecureField("Tu contraseña", text: $iptv.password)
+                                                .font(.system(size: 14))
+                                                .foregroundColor(Theme.textWhite)
+                                                .autocapitalization(.none)
+                                                .disableAutocorrection(true)
+                                        }
+
+                                        Button(action: { isPasswordVisible.toggle() }) {
+                                            Image(systemName: isPasswordVisible ? "eye.slash.fill" : "eye.fill")
+                                                .font(.system(size: 14))
+                                                .foregroundColor(Theme.textMuted)
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .background(Theme.navyBg)
+                                    .cornerRadius(12)
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border, lineWidth: 1))
+                                }
+                            }
+                            .padding(16)
+                            .background(Theme.cardBg)
+                            .cornerRadius(16)
+                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.border, lineWidth: 1))
+                        }
+
+                        // Botón de Acción Principal (Amarillo #FFC61A)
+                        Button(action: {
+                            iptv.fetchChannels()
+                            presentationMode.wrappedValue.dismiss()
+                        }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 14, weight: .black))
+                                Text("Guardar y Conectar")
+                                    .font(.system(size: 15, weight: .black))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Theme.yellow)
+                            .foregroundColor(Theme.navyBg)
+                            .cornerRadius(14)
+                            .shadow(color: Theme.yellow.opacity(0.35), radius: 10, y: 4)
+                        }
+                        .padding(.top, 6)
+
+                        Spacer(minLength: 24)
                     }
-                }
-
-                Section {
-                    Button(action: {
-                        iptv.fetchChannels()
-                        presentationMode.wrappedValue.dismiss()
-                    }) {
-                        HStack {
-                            Spacer()
-                            Text("Guardar y Sincronizar")
-                                .bold()
-                                .foregroundColor(.red)
-                            Spacer()
-                        }
-                    }
+                    .padding(20)
                 }
             }
             .navigationBarTitle("Ajustes", displayMode: .inline)
-            .navigationBarItems(trailing: Button("Cerrar") {
-                presentationMode.wrappedValue.dismiss()
-            })
+            .navigationBarItems(
+                leading: Button(action: {
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(Theme.textWhite)
+                },
+                trailing: Button(action: {
+                    presentationMode.wrappedValue.dismiss()
+                }) {
+                    Text("Listo")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(Theme.yellow)
+                }
+            )
+        }
+        .alert(isPresented: $showConfirmClearRecents) {
+            Alert(
+                title: Text("Borrar Recientes"),
+                message: Text("¿Deseas vaciar la lista de canales vistos recientemente?"),
+                primaryButton: .destructive(Text("Borrar")) { iptv.clearRecents() },
+                secondaryButton: .cancel()
+            )
         }
     }
 }
