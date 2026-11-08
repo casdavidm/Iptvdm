@@ -816,6 +816,34 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 }
 
+// MARK: - App Logo View (DMTV)
+struct AppLogoView: View {
+    var height: CGFloat = 26
+
+    var body: some View {
+        Group {
+            if let image = UIImage(named: "AppLogo") ?? UIImage(contentsOfFile: Bundle.main.path(forResource: "logo", ofType: "png") ?? "") {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: height)
+            } else {
+                HStack(spacing: 4) {
+                    Text("DM")
+                        .font(.system(size: height * 0.72, weight: .black))
+                        .foregroundColor(Theme.yellow)
+                    Rectangle()
+                        .fill(Theme.yellow)
+                        .frame(width: 2, height: height * 0.7)
+                    Text("TV")
+                        .font(.system(size: height * 0.72, weight: .black))
+                        .foregroundColor(Theme.textWhite)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Slide-out Categories Drawer
 struct CategoriesDrawerView: View {
     @ObservedObject var iptv: IPTVManager
@@ -834,15 +862,8 @@ struct CategoriesDrawerView: View {
             VStack(alignment: .leading, spacing: 0) {
                 // Header del Drawer
                 HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Text("STREAM")
-                                .font(.system(size: 18, weight: .black))
-                                .foregroundColor(Theme.textWhite)
-                            Text("OS")
-                                .font(.system(size: 18, weight: .black))
-                                .foregroundColor(Theme.yellow)
-                        }
+                    VStack(alignment: .leading, spacing: 3) {
+                        AppLogoView(height: 28)
                         Text("iptv player")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(Theme.textMuted)
@@ -1226,15 +1247,8 @@ struct ContentView: View {
                                 .overlay(Circle().stroke(Theme.border, lineWidth: 1))
                         }
 
-                        // Logo de StreamOS
-                        HStack(spacing: 3) {
-                            Text("STREAM")
-                                .font(.system(size: 18, weight: .black))
-                                .foregroundColor(Theme.textWhite)
-                            Text("OS")
-                                .font(.system(size: 18, weight: .black))
-                                .foregroundColor(Theme.yellow)
-                        }
+                        // Logo DM TV
+                        AppLogoView(height: 26)
 
                         Spacer()
 
@@ -1483,7 +1497,7 @@ struct ContentView: View {
                     // Barra Now Playing directa y limpia
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(iptv.selectedChannel?.name ?? "StreamOS")
+                            Text(iptv.selectedChannel?.name ?? "DM TV")
                                 .font(.system(size: 15, weight: .bold))
                                 .foregroundColor(Theme.textWhite)
                                 .lineLimit(1)

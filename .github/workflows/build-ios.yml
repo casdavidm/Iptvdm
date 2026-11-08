@@ -209,6 +209,7 @@ jobs:
           cp -R build/Release-iphoneos/StreamOS.app Payload/
           cp StreamOSNative/Info.plist Payload/StreamOS.app/Info.plist
           cp StreamOSNative/AppIcon*.png Payload/StreamOS.app/ 2>/dev/null || true
+          cp StreamOSNative/logo.png Payload/StreamOS.app/ 2>/dev/null || true
           plutil -convert binary1 Payload/StreamOS.app/Info.plist
           plutil -p Payload/StreamOS.app/Info.plist | grep -A 5 NSAppTransportSecurity || true
           plutil -p Payload/StreamOS.app/Info.plist | grep -A 10 CFBundleIcons || true
