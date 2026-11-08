@@ -844,6 +844,54 @@ struct AppLogoView: View {
     }
 }
 
+// MARK: - Tab Icon View (Custom Icons: Layers, Star, Clock)
+struct TabIconView: View {
+    let tab: FilterTab
+    let isSelected: Bool
+    var size: CGFloat = 22
+
+    var body: some View {
+        Group {
+            let assetName: String = {
+                switch tab {
+                case .all: return "tab_all"
+                case .favorites: return "tab_favorites"
+                case .recent: return "tab_recent"
+                }
+            }()
+
+            if let uiImage = UIImage(named: assetName) ?? UIImage(contentsOfFile: Bundle.main.path(forResource: assetName, ofType: "png") ?? "") {
+                Image(uiImage: uiImage)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size, height: size)
+                    .foregroundColor(isSelected ? Theme.yellow : Theme.textMuted)
+            } else {
+                Image(systemName: fallbackSymbol(for: tab))
+                    .font(.system(size: size * 0.9, weight: isSelected ? .bold : .medium))
+                    .foregroundColor(isSelected ? Theme.yellow : Theme.textMuted)
+            }
+        }
+    }
+
+    private func fallbackSymbol(for tab: FilterTab) -> String {
+        switch tab {
+        case .all: return "square.stack.3d.up.fill"
+        case .favorites: return "star.fill"
+        case .recent: return "clock.arrow.circlepath"
+        }
+    }
+}
+
+// MARK: - Scroll Offset Tracker for Auto-Hiding Bottom Bar
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // MARK: - Slide-out Categories Drawer
 struct CategoriesDrawerView: View {
     @ObservedObject var iptv: IPTVManager
@@ -1194,6 +1242,8 @@ struct ContentView: View {
     @State private var isFullScreen: Bool = false
     @State private var showControls: Bool = true
     @State private var controlsTimer: Timer? = nil
+    @State private var isBottomBarVisible: Bool = true
+    @State private var lastScrollOffset: CGFloat = 0
 
     func resetControlsTimer() {
         controlsTimer?.invalidate()
@@ -1574,6 +1624,9 @@ struct ContentView: View {
                                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                                     iptv.activeTab = .all
                                     iptv.selectedCategory = cat
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        isBottomBarVisible = true
+                                    }
                                 }) {
                                     Text(cat)
                                         .font(.system(size: 12, weight: isSelected ? .bold : .medium))
@@ -1632,103 +1685,153 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
                             ScrollView(showsIndicators: false) {
-                                if iptv.isGridView {
-                                    // Vista Cuadrícula
-                                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                                        ForEach(iptv.filteredChannels, id: \.id) { channel in
-                                            let isChannelSelected = (iptv.selectedChannel?.streamId == channel.streamId && !channel.streamId.isEmpty) || (iptv.selectedChannel?.id == channel.id)
-                                            ChannelGridCard(
-                                                channel: channel,
-                                                isSelected: isChannelSelected,
-                                                isPlaying: isPlaying,
-                                                isFavorite: iptv.isFavorite(channel),
-                                                onSelect: {
-                                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                                                    isPlaying = true
-                                                    iptv.selectedChannel = channel
-                                                    iptv.recordWatched(channel)
-                                                },
-                                                onToggleFavorite: {
-                                                    iptv.toggleFavorite(channel)
-                                                }
-                                            )
-                                        }
+                                VStack(spacing: 0) {
+                                    // Tracker invisible de desplazamiento vertical
+                                    GeometryReader { proxy in
+                                        Color.clear.preference(
+                                            key: ScrollOffsetPreferenceKey.self,
+                                            value: proxy.frame(in: .named("channelScroll")).minY
+                                        )
                                     }
-                                    .padding(.horizontal, 14)
-                                    .padding(.top, 8)
-                                    .padding(.bottom, 74) // Espacio para la barra flotante
-                                } else {
-                                    // Vista Lista
-                                    LazyVStack(spacing: 8) {
-                                        ForEach(iptv.filteredChannels, id: \.id) { channel in
-                                            let isChannelSelected = (iptv.selectedChannel?.streamId == channel.streamId && !channel.streamId.isEmpty) || (iptv.selectedChannel?.id == channel.id)
-                                            ChannelListRow(
-                                                channel: channel,
-                                                isSelected: isChannelSelected,
-                                                isPlaying: isPlaying,
-                                                isFavorite: iptv.isFavorite(channel),
-                                                onSelect: {
-                                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                                                    isPlaying = true
-                                                    iptv.selectedChannel = channel
-                                                    iptv.recordWatched(channel)
-                                                },
-                                                onToggleFavorite: {
-                                                    iptv.toggleFavorite(channel)
-                                                }
-                                            )
+                                    .frame(height: 0)
+
+                                    if iptv.isGridView {
+                                        // Vista Cuadrícula
+                                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                                            ForEach(iptv.filteredChannels, id: \.id) { channel in
+                                                let isChannelSelected = (iptv.selectedChannel?.streamId == channel.streamId && !channel.streamId.isEmpty) || (iptv.selectedChannel?.id == channel.id)
+                                                ChannelGridCard(
+                                                    channel: channel,
+                                                    isSelected: isChannelSelected,
+                                                    isPlaying: isPlaying,
+                                                    isFavorite: iptv.isFavorite(channel),
+                                                    onSelect: {
+                                                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                                        isPlaying = true
+                                                        iptv.selectedChannel = channel
+                                                        iptv.recordWatched(channel)
+                                                    },
+                                                    onToggleFavorite: {
+                                                        iptv.toggleFavorite(channel)
+                                                    }
+                                                )
+                                            }
                                         }
+                                        .padding(.horizontal, 14)
+                                        .padding(.top, 8)
+                                        .padding(.bottom, 78) // Espacio para que el último canal nunca quede tapado
+                                    } else {
+                                        // Vista Lista
+                                        LazyVStack(spacing: 8) {
+                                            ForEach(iptv.filteredChannels, id: \.id) { channel in
+                                                let isChannelSelected = (iptv.selectedChannel?.streamId == channel.streamId && !channel.streamId.isEmpty) || (iptv.selectedChannel?.id == channel.id)
+                                                ChannelListRow(
+                                                    channel: channel,
+                                                    isSelected: isChannelSelected,
+                                                    isPlaying: isPlaying,
+                                                    isFavorite: iptv.isFavorite(channel),
+                                                    onSelect: {
+                                                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                                        isPlaying = true
+                                                        iptv.selectedChannel = channel
+                                                        iptv.recordWatched(channel)
+                                                    },
+                                                    onToggleFavorite: {
+                                                        iptv.toggleFavorite(channel)
+                                                    }
+                                                )
+                                            }
+                                        }
+                                        .padding(.horizontal, 14)
+                                        .padding(.top, 8)
+                                        .padding(.bottom, 78) // Espacio para que el último canal nunca quede tapado
                                     }
-                                    .padding(.horizontal, 14)
-                                    .padding(.top, 8)
-                                    .padding(.bottom, 74) // Espacio para la barra flotante
                                 }
+                            }
+                            .coordinateSpace(name: "channelScroll")
+                            .onPreferenceChange(ScrollOffsetPreferenceKey.self) { newOffset in
+                                let delta = newOffset - lastScrollOffset
+                                if delta < -10 {
+                                    // Scroll hacia abajo: ocultar el menú suavemente estilo YouTube
+                                    if isBottomBarVisible {
+                                        withAnimation(.easeInOut(duration: 0.22)) {
+                                            isBottomBarVisible = false
+                                        }
+                                    }
+                                } else if delta > 10 || newOffset > -20 {
+                                    // Scroll hacia arriba o cerca del inicio: volver a mostrar el menú
+                                    if !isBottomBarVisible {
+                                        withAnimation(.easeInOut(duration: 0.22)) {
+                                            isBottomBarVisible = true
+                                        }
+                                    }
+                                }
+                                lastScrollOffset = newOffset
                             }
                         }
 
-                        // 4. Barra Flotante Inferior de Pestañas (Píldora flotante minimalista)
-                        HStack(spacing: 4) {
-                            ForEach(FilterTab.allCases, id: \.self) { tab in
-                                let isTabActive = (iptv.activeTab == tab)
-                                let badgeCount: Int? = {
-                                    if tab == .favorites { return iptv.favoriteIds.count }
-                                    if tab == .recent { return iptv.recentIds.count }
-                                    return nil
-                                }()
+                        // 4. Barra Inferior Estilo YouTube con Separación y Auto-Hide en Scroll
+                        VStack(spacing: 0) {
+                            // Línea divisoria superior que separa claramente el menú del fondo y tarjetas
+                            Rectangle()
+                                .fill(Color.white.opacity(0.12))
+                                .frame(height: 1)
 
-                                Button(action: {
-                                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        iptv.activeTab = tab
-                                    }
-                                }) {
-                                    HStack(spacing: 5) {
-                                        Text(tab.rawValue)
-                                            .font(.system(size: 13, weight: isTabActive ? .bold : .medium))
+                            HStack(alignment: .center, spacing: 0) {
+                                ForEach(FilterTab.allCases, id: \.self) { tab in
+                                    let isTabActive = (iptv.activeTab == tab)
+                                    let badgeCount: Int? = {
+                                        if tab == .favorites { return iptv.favoriteIds.count }
+                                        if tab == .recent { return iptv.recentIds.count }
+                                        return nil
+                                    }()
 
-                                        if let count = badgeCount, count > 0 {
-                                            Text("\(count)")
-                                                .font(.system(size: 10, weight: .bold))
-                                                .padding(.horizontal, 5)
-                                                .padding(.vertical, 1)
-                                                .background(isTabActive ? Theme.navyBg.opacity(0.2) : Theme.yellowMuted)
-                                                .cornerRadius(8)
+                                    Button(action: {
+                                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            iptv.activeTab = tab
+                                            isBottomBarVisible = true
                                         }
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            ZStack(alignment: .topTrailing) {
+                                                TabIconView(tab: tab, isSelected: isTabActive, size: 24)
+                                                    .padding(.top, 4)
+
+                                                if let count = badgeCount, count > 0 {
+                                                    Text("\(count)")
+                                                        .font(.system(size: 9, weight: .black))
+                                                        .foregroundColor(isTabActive ? Theme.navyBg : Theme.textWhite)
+                                                        .padding(.horizontal, 5)
+                                                        .padding(.vertical, 1)
+                                                        .background(isTabActive ? Theme.yellow : Theme.cardHover)
+                                                        .clipShape(Capsule())
+                                                        .overlay(Capsule().stroke(Theme.border, lineWidth: 0.5))
+                                                        .offset(x: 14, y: -2)
+                                                }
+                                            }
+                                            .frame(height: 26)
+
+                                            Text(tab.rawValue)
+                                                .font(.system(size: 10, weight: isTabActive ? .bold : .medium))
+                                                .foregroundColor(isTabActive ? Theme.yellow : Theme.textMuted)
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                        .contentShape(Rectangle())
                                     }
-                                    .foregroundColor(isTabActive ? Theme.navyBg : Theme.textWhite)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 9)
-                                    .background(isTabActive ? Theme.yellow : Color.clear)
-                                    .cornerRadius(20)
+                                    .buttonStyle(PlainButtonStyle())
                                 }
                             }
+                            .padding(.top, 6)
+                            .padding(.bottom, 6)
                         }
-                        .padding(4)
-                        .background(Theme.cardBg)
-                        .cornerRadius(24)
-                        .overlay(RoundedRectangle(cornerRadius: 24).stroke(Theme.border, lineWidth: 1))
-                        .shadow(color: Color.black.opacity(0.4), radius: 10, y: 4)
-                        .padding(.bottom, 12)
+                        .background(
+                            Theme.cardBg
+                                .shadow(color: Color.black.opacity(0.55), radius: 8, y: -3)
+                        )
+                        .offset(y: isBottomBarVisible ? 0 : 85)
+                        .opacity(isBottomBarVisible ? 1.0 : 0.0)
+                        .animation(.easeInOut(duration: 0.25), value: isBottomBarVisible)
                     }
                 }
             }
