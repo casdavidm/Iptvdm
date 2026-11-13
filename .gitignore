@@ -1,0 +1,9 @@
+# Proyecto de Xcode: en CI lo genera XcodeGen a partir de project.yml
+StreamOS.xcodeproj/
+# MobileVLCKit se descarga en CI
+Frameworks/
+build/
+Payload/
+*.ipa
+xcuserdata/
+.DS_Store
